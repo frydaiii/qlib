@@ -43,7 +43,6 @@ tags
 
 .pytest_cache/
 .mypy_cache/
-.vscode/
 
 *.swp
 
