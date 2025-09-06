@@ -265,18 +265,18 @@ class VNStockCollectorVN1D(VNStockCollector):
                 df = quote.history(start=self.start_datetime, end=self.end_datetime, interval='1D')
                 
                 if df is not None and not df.empty:
-                    # Rename columns to match qlib format
-                    column_mapping = {
-                        'time': 'date',
-                        'open': 'open', 
-                        'high': 'high',
-                        'low': 'low',
-                        'close': 'close',
-                        'volume': 'volume'
-                    }
+                    # # Rename columns to match qlib format
+                    # column_mapping = {
+                    #     'time': 'date',
+                    #     'open': 'open', 
+                    #     'high': 'high',
+                    #     'low': 'low',
+                    #     'close': 'close',
+                    #     'volume': 'volume'
+                    # }
                     
-                    # Apply column mapping if columns exist
-                    df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
+                    # # Apply column mapping if columns exist
+                    # df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
                     
                     # Ensure required columns exist
                     required_cols = ['date', 'open', 'high', 'low', 'close', 'volume']
@@ -334,7 +334,7 @@ class VNStockNormalize(BaseNormalize):
         return change_series
 
     @staticmethod
-    def normalize_yahoo(
+    def normalize_vnstock(
         df: pd.DataFrame,
         calendar_list: list | None = None,
         date_field_name: str = "date",
@@ -393,7 +393,7 @@ class VNStockNormalize(BaseNormalize):
 
     def normalize(self, df: pd.DataFrame) -> pd.DataFrame:
         # normalize
-        df = self.normalize_yahoo(df, self._calendar_list, self._date_field_name, self._symbol_field_name)
+        df = self.normalize_vnstock(df, self._calendar_list, self._date_field_name, self._symbol_field_name)
         # adjusted price
         df = self.adjusted_price(df)
         return df
@@ -471,7 +471,7 @@ class VNStockNormalize1DExtend(VNStockNormalize1D):
         Parameters
         ----------
         old_qlib_data_dir: str, Path
-            the qlib data to be updated for yahoo, usually from: https://github.com/microsoft/qlib/tree/main/scripts#download-cn-data
+            the qlib data to be updated for vnstock, usually from: https://github.com/microsoft/qlib/tree/main/scripts#download-cn-data
         date_field_name: str
             date field name, default is date
         symbol_field_name: str
@@ -526,7 +526,7 @@ class VNStockNormalize1min(VNStockNormalize, ABC):
         Parameters
         ----------
         qlib_data_1d_dir: str, Path
-            the qlib data to be updated for yahoo, usually from: Normalised to 1min using local 1D data
+            the qlib data to be updated for vnstock, usually from: Normalised to 1min using local 1D data
         date_field_name: str
             date field name, default is date
         symbol_field_name: str
@@ -565,8 +565,8 @@ class VNStockNormalize1min(VNStockNormalize, ABC):
         return df
 
     @abc.abstractmethod
-    def symbol_to_yahoo(self, symbol):
-        raise NotImplementedError("rewrite symbol_to_yahoo")
+    def symbol_to_vnstock(self, symbol):
+        raise NotImplementedError("rewrite symbol_to_vnstock")
 
     @abc.abstractmethod
     def _get_1d_calendar_list(self) -> Iterable[pd.Timestamp]:
@@ -688,7 +688,7 @@ class VNStockNormalizeVN1min(VNStockNormalizeVN, VNStockNormalize1min):
     def _get_calendar_list(self) -> Iterable[pd.Timestamp]:
         return self.generate_1min_from_daily(self.calendar_list_1d)
 
-    def symbol_to_yahoo(self, symbol):
+    def symbol_to_vnstock(self, symbol):
         # Vietnamese stocks don't need conversion like Chinese stocks
         # VNStock uses direct symbol names
         return symbol
@@ -795,9 +795,9 @@ class Run(BaseRun):
 
                 qlib_data_1d can be obtained like this:
                     $ python scripts/get_data.py qlib_data --target_dir <qlib_data_1d_dir> --interval 1D
-                    $ python scripts/data_collector/yahoo/collector.py update_data_to_bin --qlib_data_1d_dir <qlib_data_1d_dir> --trading_date 2021-06-01
+                    $ python scripts/data_collector/vnstock/collector.py update_data_to_bin --qlib_data_1d_dir <qlib_data_1d_dir> --trading_date 2021-06-01
                 or:
-                    download 1D data, reference: https://github.com/microsoft/qlib/tree/main/scripts/data_collector/yahoo#1D-from-yahoo
+                    download 1D data, reference: https://github.com/microsoft/qlib/tree/main/scripts/data_collector/vnstock#1D-from-vnstock
 
         Examples
         ---------
@@ -807,7 +807,7 @@ class Run(BaseRun):
         if self.interval.lower() == "1min":
             if qlib_data_1d_dir is None or not Path(qlib_data_1d_dir).expanduser().exists():
                 raise ValueError(
-                    "If normalize 1min, the qlib_data_1d_dir parameter must be set: --qlib_data_1d_dir <user qlib 1D data >, Reference: https://github.com/microsoft/qlib/tree/main/scripts/data_collector/yahoo#automatic-update-of-daily-frequency-datafrom-yahoo-finance"
+                    "If normalize 1min, the qlib_data_1d_dir parameter must be set: --qlib_data_1d_dir <user qlib 1D data >, Reference: https://github.com/microsoft/qlib/tree/main/scripts/data_collector/vnstock#automatic-update-of-daily-frequency-datafrom-vnstock-finance"
                 )
         super(Run, self).normalize_data(
             date_field_name, symbol_field_name, end_date=end_date, qlib_data_1d_dir=qlib_data_1d_dir
@@ -816,17 +816,17 @@ class Run(BaseRun):
     def normalize_data_1d_extend(
         self, old_qlib_data_dir, date_field_name: str = "date", symbol_field_name: str = "symbol"
     ):
-        """normalize data extend; extending yahoo qlib data(from: https://github.com/microsoft/qlib/tree/main/scripts#download-cn-data)
+        """normalize data extend; extending vnstock qlib data(from: https://github.com/microsoft/qlib/tree/main/scripts#download-cn-data)
 
         Notes
         -----
-            Steps to extend yahoo qlib data:
+            Steps to extend vnstock qlib data:
 
                 1. download qlib data: https://github.com/microsoft/qlib/tree/main/scripts#download-cn-data; save to <dir1>
 
-                2. collector source data: https://github.com/microsoft/qlib/tree/main/scripts/data_collector/yahoo#collector-data; save to <dir2>
+                2. collector source data: https://github.com/microsoft/qlib/tree/main/scripts/data_collector/vnstock#collector-data; save to <dir2>
 
-                3. normalize new source data(from step 2): python scripts/data_collector/yahoo/collector.py normalize_data_1d_extend --old_qlib_dir <dir1> --source_dir <dir2> --normalize_dir <dir3> --region CN --interval 1D
+                3. normalize new source data(from step 2): python scripts/data_collector/vnstock/collector.py normalize_data_1d_extend --old_qlib_dir <dir1> --source_dir <dir2> --normalize_dir <dir3> --region CN --interval 1D
 
                 4. dump data: python scripts/dump_bin.py dump_update --data_path <dir3> --qlib_dir <dir1> --freq day --date_field_name date --symbol_field_name symbol --exclude_fields symbol,date
 
@@ -835,7 +835,7 @@ class Run(BaseRun):
         Parameters
         ----------
         old_qlib_data_dir: str
-            the qlib data to be updated for yahoo, usually from: https://github.com/microsoft/qlib/tree/main/scripts#download-cn-data
+            the qlib data to be updated for vnstock, usually from: https://github.com/microsoft/qlib/tree/main/scripts#download-cn-data
         date_field_name: str
             date field name, default date
         symbol_field_name: str
@@ -914,12 +914,12 @@ class Run(BaseRun):
         delay: float = 1,
         exists_skip: bool = False,
     ):
-        """update yahoo data to bin
+        """update vnstock data to bin
 
         Parameters
         ----------
         qlib_data_1d_dir: str
-            the qlib data to be updated for yahoo, usually from: https://github.com/microsoft/qlib/tree/main/scripts#download-cn-data
+            the qlib data to be updated for vnstock, usually from: https://github.com/microsoft/qlib/tree/main/scripts#download-cn-data
 
         end_date: str
             end datetime, default ``pd.Timestamp(trading_date + pd.Timedelta(days=1))``; open interval(excluding end)
