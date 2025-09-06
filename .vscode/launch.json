@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug VNStock collector",
+            "name": "Download VNStock collector",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/scripts/data_collector/vnstock/collector.py",
@@ -13,11 +13,11 @@
             "args": [
                 "download_data",
                 "--source_dir",
-                "./.qlib/vn_data_1d",
+                "~/.qlib/vn_data_1d",
                 "--start",
                 "2020-01-01",
                 "--end",
-                "2020-12-31",
+                "2025-09-05",
                 "--delay",
                 "1",
                 "--interval",
