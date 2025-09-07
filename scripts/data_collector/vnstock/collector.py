@@ -587,7 +587,7 @@ class VNStockNormalizeVN:
             stock = vnstock.stock(symbol="VNI", source="TCBS")  # VNINDEX
             
             # Get historical data to determine trading days
-            start_date = "2000-01-01"
+            start_date = "2009-01-01"
             end_date = pd.Timestamp.now().strftime("%Y-%m-%d")
             
             df = stock.quote.history(start=start_date, end=end_date, interval="1D")
