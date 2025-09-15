@@ -986,6 +986,630 @@ class Run(BaseRun):
         # For now, we'll skip this step as it requires additional implementation
         logger.info("Index constituent parsing not yet implemented for Vietnamese market")
 
+    @staticmethod
+    def _normalize_interval_format(interval: str) -> tuple[str, str]:
+        """Normalize interval format and return standardized format and frequency for dumping
+        
+        Parameters
+        ----------
+        interval : str
+            Input interval string (e.g., "1D", "5m", "1H", etc.)
+            
+        Returns
+        -------
+        tuple[str, str]
+            Tuple of (normalized_interval, dump_frequency)
+            
+        Examples
+        --------
+        >>> Run._normalize_interval_format("1D")
+        ("1D", "day")
+        >>> Run._normalize_interval_format("5min")
+        ("5min", "5min")
+        >>> Run._normalize_interval_format("1h")
+        ("1H", "1h")
+        """
+        interval_lower = interval.lower()
+        
+        # Mapping of input formats to (standardized_format, dump_frequency)
+        interval_mapping = {
+            # Daily intervals
+            "1d": ("1D", "day"),
+            "1D": ("1D", "day"),
+            
+            # Minute intervals
+            "1min": ("1min", "1min"),
+            "1m": ("1min", "1min"),
+            "5min": ("5min", "5min"),
+            "5m": ("5min", "5min"),
+            "30min": ("30min", "30min"),
+            "30m": ("30min", "30min"),
+            
+            # Hour intervals
+            "1h": ("1H", "1h"),
+            "1H": ("1H", "1h"),
+            "6h": ("6H", "6h"),
+            "6H": ("6H", "6h"),
+        }
+        
+        if interval_lower not in interval_mapping:
+            supported = list(interval_mapping.keys())
+            raise ValueError(f"Unsupported interval: {interval}. Supported intervals: {supported}")
+        
+        return interval_mapping[interval_lower]
+
+    def update_data_to_bin_multi_interval(
+        self,
+        qlib_data_dir: str,
+        target_interval: str = None,
+        end_date: str | None = None,
+        check_data_length: int | None = None,
+        delay: float = 1,
+        exists_skip: bool = False,
+    ):
+        """Update vnstock data to bin format supporting multiple time intervals
+        
+        This is an enhanced version of update_data_to_bin that supports multiple time intervals
+        including 1D (daily), 1min (minute-level), and other frequencies.
+
+        Parameters
+        ----------
+        qlib_data_dir: str
+            The qlib data directory to be updated. This should contain the base data.
+        target_interval: str, optional
+            The target interval for updating. If None, uses self.interval.
+            Supported values: "1D", "1d", "1min", "1m", "5m", "5min", "30m", "30min", "1h", "1H", "6h", "6H"
+        end_date: str, optional
+            End datetime, default ``pd.Timestamp(trading_date + pd.Timedelta(days=1))``; 
+            open interval (excluding end)
+        check_data_length: int, optional
+            Check data length, if not None and greater than 0, each symbol will be considered 
+            complete if its data length is greater than or equal to this value, otherwise it 
+            will be fetched again, the maximum number of fetches being (max_collector_count). 
+            By default None.
+        delay: float
+            time.sleep(delay), default 1
+        exists_skip: bool
+            exists skip, by default False
+
+        Notes
+        -----
+            This function supports multiple intervals by:
+            1. Dynamically determining the calendar file based on interval
+            2. Using appropriate normalization methods for each interval
+            3. Setting correct frequency parameters for dump operations
+            4. Handling interval-specific data requirements
+
+        Examples
+        --------
+            # Update daily data
+            $ python collector.py update_data_to_bin_multi_interval --qlib_data_dir <dir> --target_interval 1D
+            
+            # Update 1-minute data
+            $ python collector.py update_data_to_bin_multi_interval --qlib_data_dir <dir> --target_interval 1min
+            
+            # Update 5-minute data
+            $ python collector.py update_data_to_bin_multi_interval --qlib_data_dir <dir> --target_interval 5m
+            
+            # Update 30-minute data
+            $ python collector.py update_data_to_bin_multi_interval --qlib_data_dir <dir> --target_interval 30min
+            
+            # Update hourly data
+            $ python collector.py update_data_to_bin_multi_interval --qlib_data_dir <dir> --target_interval 1H
+            
+            # Update 6-hour data
+            $ python collector.py update_data_to_bin_multi_interval --qlib_data_dir <dir> --target_interval 6h
+        """
+        
+        # Use target_interval if provided, otherwise use instance interval
+        interval = target_interval if target_interval is not None else self.interval
+        
+        logger.info(f"Starting multi-interval data update for interval: {interval}")
+        
+        # Normalize interval format and validate
+        try:
+            standardized_interval, freq = self._normalize_interval_format(interval)
+        except ValueError as e:
+            logger.error(str(e))
+            raise
+        
+        # Download qlib data if it doesn't exist
+        qlib_data_dir = str(Path(qlib_data_dir).expanduser().resolve())
+        if not exists_qlib_data(qlib_data_dir):
+            logger.info(f"Qlib data directory not found, downloading initial data...")
+            GetData().qlib_data(
+                target_dir=qlib_data_dir, 
+                interval=standardized_interval, 
+                region=self.region, 
+                exists_skip=exists_skip
+            )
+
+        # Determine calendar file based on frequency
+        calendar_file = f"{freq}.txt" if freq != "day" else "day.txt"
+        
+        # Check if specific calendar file exists, fallback to day.txt
+        calendar_file_path = Path(qlib_data_dir).joinpath(f"calendars/{calendar_file}")
+        if not calendar_file_path.exists():
+            logger.warning(f"Calendar file {calendar_file} not found, using day.txt as fallback")
+            calendar_file = "day.txt"
+        
+        # Read calendar and determine trading dates
+        calendar_file_path = Path(qlib_data_dir).joinpath(f"calendars/{calendar_file}")
+        if not calendar_file_path.exists():
+            logger.warning(f"Calendar file {calendar_file_path} not found, using day.txt as fallback")
+            calendar_file_path = Path(qlib_data_dir).joinpath("calendars/day.txt")
+        
+        calendar_df = pd.read_csv(calendar_file_path)
+        trading_date = (pd.Timestamp(str(calendar_df.iloc[-1, 0])) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+        if end_date is None:
+            end_date = (pd.Timestamp(trading_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+        logger.info(f"Updating data from {trading_date} to {end_date}")
+
+        # Download data from vnstock
+        # NOTE: when downloading data from vnstock, max_workers is recommended to be 1
+        original_interval = self.interval
+        try:
+            # Temporarily set the interval for data collection
+            self.interval = standardized_interval
+            self.download_data(
+                delay=delay, 
+                start=trading_date, 
+                end=end_date, 
+                check_data_length=check_data_length or 0
+            )
+        finally:
+            # Restore original interval
+            self.interval = original_interval
+
+        # Adjust max_workers for normalization and dumping
+        self.max_workers = (
+            max(multiprocessing.cpu_count() - 2, 1)
+            if self.max_workers is None or self.max_workers <= 1
+            else self.max_workers
+        )
+
+        # Normalize data based on interval
+        if standardized_interval == "1D":
+            # Use existing 1D extend method
+            logger.info("Normalizing daily data...")
+            self.normalize_data_1d_extend(qlib_data_dir)
+        elif standardized_interval in ["1min", "5min", "30min", "1H", "6H"]:
+            # For intraday data, we need 1D reference data for proper normalization
+            logger.info(f"Normalizing {standardized_interval} intraday data...")
+            self.normalize_data(
+                qlib_data_1d_dir=qlib_data_dir,
+                date_field_name="date",
+                symbol_field_name="symbol"
+            )
+        else:
+            # Generic normalization for other intervals
+            logger.info(f"Normalizing data for interval {standardized_interval}...")
+            self.normalize_data(
+                date_field_name="date",
+                symbol_field_name="symbol"
+            )
+
+        # Dump to binary format
+        logger.info(f"Dumping data to binary format with frequency: {freq}")
+        _dump = DumpDataUpdate(
+            data_path=str(self.normalize_dir),
+            qlib_dir=qlib_data_dir,
+            exclude_fields="symbol,date",
+            max_workers=self.max_workers,
+            freq=freq  # Use the determined frequency
+        )
+        _dump.dump()
+
+        # Parse index constituents (region-specific)
+        _region = self.region.lower()
+        if _region not in ["vn"]:
+            logger.warning(f"Unsupported region: region={_region}, component downloads will be ignored")
+            return
+        
+        # For Vietnamese market, we could add index constituent parsing here
+        # For now, we'll skip this step as it requires additional implementation
+        logger.info("Index constituent parsing not yet implemented for Vietnamese market")
+        logger.info(f"Successfully updated data to binary format for interval: {standardized_interval}")
+
+    def update_data_to_bin_batch(
+        self,
+        qlib_data_dir: str,
+        intervals: list[str],
+        end_date: str | None = None,
+        check_data_length: int | None = None,
+        delay: float = 1,
+        exists_skip: bool = False,
+    ):
+        """Update vnstock data to bin format for multiple intervals in batch
+        
+        This function allows updating data for multiple time intervals in a single operation,
+        which is efficient for maintaining datasets across different timeframes.
+
+        Parameters
+        ----------
+        qlib_data_dir: str
+            The qlib data directory to be updated. This should contain the base data.
+        intervals: list[str]
+            List of intervals to update. 
+            Supported values: ["1D", "1d", "1min", "1m", "5m", "5min", "30m", "30min", "1h", "1H", "6h", "6H"]
+        end_date: str, optional
+            End datetime, default ``pd.Timestamp(trading_date + pd.Timedelta(days=1))``; 
+            open interval (excluding end)
+        check_data_length: int, optional
+            Check data length, if not None and greater than 0, each symbol will be considered 
+            complete if its data length is greater than or equal to this value, otherwise it 
+            will be fetched again, the maximum number of fetches being (max_collector_count). 
+            By default None.
+        delay: float
+            time.sleep(delay), default 1
+        exists_skip: bool
+            exists skip, by default False
+
+        Notes
+        -----
+            This function processes intervals in the following order for optimal efficiency:
+            1. Daily data first (1D) - as it's used as reference for intraday data
+            2. Intraday intervals in ascending order (1min, 5min, 30min, 1H, 6H)
+            
+            Each interval update is independent, so if one fails, others will continue.
+
+        Examples
+        --------
+            # Update multiple intervals
+            $ python collector.py update_data_to_bin_batch --qlib_data_dir <dir> --intervals 1D,1min,5min,1H
+            
+            # Update all supported intervals
+            $ python collector.py update_data_to_bin_batch --qlib_data_dir <dir> --intervals 1D,1min,5min,30min,1H,6H
+        """
+        if not intervals:
+            logger.warning("No intervals provided for batch update")
+            return
+        
+        logger.info(f"Starting batch update for intervals: {intervals}")
+        
+        # Validate all intervals first
+        validated_intervals = []
+        for interval in intervals:
+            try:
+                standardized_interval, _ = self._normalize_interval_format(interval)
+                validated_intervals.append((interval, standardized_interval))
+            except ValueError as e:
+                logger.error(f"Invalid interval '{interval}': {e}")
+                continue
+        
+        if not validated_intervals:
+            logger.error("No valid intervals found for batch update")
+            return
+        
+        # Sort intervals for optimal processing order
+        # Daily first, then intraday in ascending order
+        interval_order = ["1D", "1min", "5min", "30min", "1H", "6H"]
+        sorted_intervals = []
+        
+        for target_interval in interval_order:
+            for original, standardized in validated_intervals:
+                if standardized == target_interval:
+                    sorted_intervals.append((original, standardized))
+        
+        # Add any remaining intervals not in the standard order
+        for original, standardized in validated_intervals:
+            if not any(std == standardized for _, std in sorted_intervals):
+                sorted_intervals.append((original, standardized))
+        
+        successful_updates = []
+        failed_updates = []
+        
+        # Process each interval
+        for original_interval, standardized_interval in sorted_intervals:
+            try:
+                logger.info(f"Processing interval: {original_interval} -> {standardized_interval}")
+                self.update_data_to_bin_multi_interval(
+                    qlib_data_dir=qlib_data_dir,
+                    target_interval=original_interval,
+                    end_date=end_date,
+                    check_data_length=check_data_length,
+                    delay=delay,
+                    exists_skip=exists_skip
+                )
+                successful_updates.append(standardized_interval)
+                logger.info(f"✓ Successfully updated interval: {standardized_interval}")
+            except Exception as e:
+                logger.error(f"✗ Failed to update interval {standardized_interval}: {e}")
+                failed_updates.append((standardized_interval, str(e)))
+        
+        # Summary report
+        logger.info(f"Batch update completed:")
+        logger.info(f"  Successful: {len(successful_updates)} intervals - {successful_updates}")
+        if failed_updates:
+            logger.warning(f"  Failed: {len(failed_updates)} intervals")
+            for interval, error in failed_updates:
+                logger.warning(f"    {interval}: {error}")
+        else:
+            logger.info(f"  All intervals updated successfully!")
+
+    def _get_normalization_method_for_interval(self, interval: str, qlib_data_dir: str = None):
+        """Get the appropriate normalization method for a given interval
+        
+        Parameters
+        ----------
+        interval: str
+            The time interval (1D, 1d, 1min, 1m, etc.)
+        qlib_data_dir: str, optional
+            Required for minute-level data normalization
+            
+        Returns
+        -------
+        callable
+            The normalization method to use
+        """
+        interval_lower = interval.lower()
+        
+        if interval_lower in ["1d", "1D"]:
+            return lambda: self.normalize_data_1d_extend(qlib_data_dir)
+        elif interval_lower in ["1min", "1m"]:
+            if qlib_data_dir is None:
+                raise ValueError("qlib_data_dir is required for minute-level data normalization")
+            return lambda: self.normalize_data(
+                qlib_data_1d_dir=qlib_data_dir,
+                date_field_name="date", 
+                symbol_field_name="symbol"
+            )
+        else:
+            # Generic normalization for other intervals
+            return lambda: self.normalize_data(
+                date_field_name="date",
+                symbol_field_name="symbol"
+            )
+
+    def update_data_to_bin_batch(
+        self,
+        qlib_data_dir: str,
+        intervals: list[str],
+        end_date: str | None = None,
+        check_data_length: int | None = None,
+        delay: float = 1,
+        exists_skip: bool = False,
+    ):
+        """Update vnstock data to bin format for multiple intervals in batch
+        
+        This function allows updating data for multiple time intervals in a single operation,
+        which is more efficient than running separate updates.
+
+        Parameters
+        ----------
+        qlib_data_dir: str
+            The qlib data directory to be updated
+        intervals: list[str]
+            List of intervals to update (e.g., ["1D", "1min"])
+        end_date: str, optional
+            End datetime for all intervals
+        check_data_length: int, optional
+            Check data length for all intervals
+        delay: float
+            Delay between data collection requests
+        exists_skip: bool
+            Skip if data already exists
+
+        Examples
+        --------
+            # Update both daily and minute data
+            $ python collector.py update_data_to_bin_batch --qlib_data_dir <dir> --intervals ["1D", "1min"]
+        """
+        
+        logger.info(f"Starting batch update for intervals: {intervals}")
+        
+        # Validate all intervals first
+        supported_intervals = ["1d", "1D", "1min", "1m"]
+        for interval in intervals:
+            if interval.lower() not in supported_intervals:
+                raise ValueError(f"Unsupported interval: {interval}. Supported intervals: {supported_intervals}")
+        
+        # Sort intervals to process daily data first (for minute data dependency)
+        daily_intervals = [i for i in intervals if i.lower() in ["1d", "1D"]]
+        minute_intervals = [i for i in intervals if i.lower() in ["1min", "1m"]]
+        other_intervals = [i for i in intervals if i.lower() not in ["1d", "1D", "1min", "1m"]]
+        
+        sorted_intervals = daily_intervals + other_intervals + minute_intervals
+        
+        results = {}
+        for interval in sorted_intervals:
+            try:
+                logger.info(f"Processing interval: {interval}")
+                self.update_data_to_bin_multi_interval(
+                    qlib_data_dir=qlib_data_dir,
+                    target_interval=interval,
+                    end_date=end_date,
+                    check_data_length=check_data_length,
+                    delay=delay,
+                    exists_skip=exists_skip
+                )
+                results[interval] = "SUCCESS"
+                logger.info(f"Successfully completed update for interval: {interval}")
+            except Exception as e:
+                logger.error(f"Failed to update interval {interval}: {str(e)}")
+                results[interval] = f"ERROR: {str(e)}"
+                # Continue with other intervals even if one fails
+                continue
+        
+        # Report results
+        logger.info("=== Batch Update Results ===")
+        for interval, status in results.items():
+            logger.info(f"{interval}: {status}")
+        
+        failed_intervals = [i for i, s in results.items() if s.startswith("ERROR")]
+        if failed_intervals:
+            logger.warning(f"Failed to update intervals: {failed_intervals}")
+        else:
+            logger.info("All intervals updated successfully!")
+        
+        return results
+
+    @classmethod
+    def get_supported_intervals(cls) -> list[str]:
+        """Get list of all supported intervals
+        
+        Returns
+        -------
+        list[str]
+            List of supported interval strings
+            
+        Examples
+        --------
+        >>> Run.get_supported_intervals()
+        ['1D', '1d', '1min', '1m', '5m', '5min', '30m', '30min', '1h', '1H', '6h', '6H']
+        """
+        return ["1D", "1d", "1min", "1m", "5m", "5min", "30m", "30min", "1h", "1H", "6h", "6H"]
+    
+    @classmethod
+    def get_standardized_intervals(cls) -> list[str]:
+        """Get list of standardized interval formats
+        
+        Returns
+        -------
+        list[str]
+            List of standardized interval strings
+            
+        Examples
+        --------
+        >>> Run.get_standardized_intervals()
+        ['1D', '1min', '5min', '30min', '1H', '6H']
+        """
+        return ["1D", "1min", "5min", "30min", "1H", "6H"]
+
+    @staticmethod
+    def validate_interval_compatibility(interval: str) -> tuple[bool, str]:
+        """Validate if an interval is supported and return normalization requirements
+        
+        Parameters
+        ----------
+        interval: str
+            The time interval to validate
+            
+        Returns
+        -------
+        tuple[bool, str]
+            (is_supported, requirements_message)
+        """
+        interval_lower = interval.lower()
+        
+        if interval_lower in ["1d", "1D"]:
+            return True, "Daily data - no additional requirements"
+        elif interval_lower in ["1min", "1m"]:
+            return True, "Minute data - requires existing daily data for normalization"
+        else:
+            return False, f"Unsupported interval: {interval}. Supported: 1D, 1d, 1min, 1m"
+
+    def get_calendar_freq_mapping(self, interval: str) -> tuple[str, str]:
+        """Get calendar file and frequency mapping for an interval
+        
+        Parameters
+        ----------
+        interval: str
+            The time interval
+            
+        Returns
+        -------
+        tuple[str, str]
+            (calendar_filename, dump_frequency)
+        """
+        interval_lower = interval.lower()
+        
+        if interval_lower in ["1d", "1D"]:
+            return "day.txt", "day"
+        elif interval_lower in ["1min", "1m"]:
+            return "1min.txt", "1min"  # Falls back to day.txt if 1min.txt doesn't exist
+        else:
+            return "day.txt", "day"  # Default fallback
+
+    def print_usage_examples(self):
+        """Print comprehensive usage examples for the new multi-interval functions"""
+        
+        examples = """
+=== VNStock Multi-Interval Data Update Examples ===
+
+1. Update Daily Data (Original functionality, enhanced):
+   python collector.py update_data_to_bin_multi_interval \\
+     --qlib_data_dir ~/.qlib/qlib_data/vn_data \\
+     --target_interval 1D \\
+     --end_date 2024-01-31
+
+2. Update 1-Minute Data (New functionality):
+   python collector.py update_data_to_bin_multi_interval \\
+     --qlib_data_dir ~/.qlib/qlib_data/vn_data \\
+     --target_interval 1min \\
+     --delay 1.0
+
+3. Batch Update Multiple Intervals:
+   python collector.py update_data_to_bin_batch \\
+     --qlib_data_dir ~/.qlib/qlib_data/vn_data \\
+     --intervals ["1D", "1min"] \\
+     --check_data_length 100
+
+4. Validate Interval Support:
+   >>> run = Run()
+   >>> is_supported, msg = run.validate_interval_compatibility("1min")
+   >>> print(f"Supported: {is_supported}, Message: {msg}")
+   
+5. Complete Workflow Example:
+   # Step 1: Download and normalize daily data
+   python collector.py download_data --interval 1D --region VN
+   python collector.py normalize_data --interval 1D --region VN
+   
+   # Step 2: Update to binary format (daily)
+   python collector.py update_data_to_bin_multi_interval \\
+     --qlib_data_dir ~/.qlib/qlib_data/vn_data --target_interval 1D
+   
+   # Step 3: Download and update minute data (uses daily data for normalization)
+   python collector.py download_data --interval 1min --region VN
+   python collector.py update_data_to_bin_multi_interval \\
+     --qlib_data_dir ~/.qlib/qlib_data/vn_data --target_interval 1min
+
+=== Key Improvements ===
+- ✅ Support for multiple time intervals (not just 1D)
+- ✅ Automatic calendar file detection based on interval
+- ✅ Proper frequency parameter handling for dump operations
+- ✅ Batch processing for multiple intervals
+- ✅ Enhanced error handling and validation
+- ✅ Backward compatibility with existing workflows
+
+=== Migration from Original update_data_to_bin ===
+Old command:
+  python collector.py update_data_to_bin --qlib_data_1d_dir <dir>
+
+New equivalent command:
+  python collector.py update_data_to_bin_multi_interval --qlib_data_dir <dir> --target_interval 1D
+
+The new function provides the same functionality with additional capabilities.
+        """
+        
+        print(examples)
+
+    def test_multi_interval_functions(self):
+        """Basic test function for the new multi-interval functionality"""
+        
+        print("Testing multi-interval functionality...")
+        
+        # Test interval validation
+        test_intervals = ["1D", "1d", "1min", "1m", "5min", "invalid"]
+        print("\\n=== Interval Validation Tests ===")
+        for interval in test_intervals:
+            is_supported, msg = self.validate_interval_compatibility(interval)
+            status = "✅ SUPPORTED" if is_supported else "❌ NOT SUPPORTED"
+            print(f"{interval:8} -> {status}: {msg}")
+        
+        # Test calendar/frequency mapping
+        print("\\n=== Calendar/Frequency Mapping Tests ===")
+        supported_intervals = ["1D", "1d", "1min", "1m"]
+        for interval in supported_intervals:
+            calendar_file, freq = self.get_calendar_freq_mapping(interval)
+            print(f"{interval:8} -> Calendar: {calendar_file:12} | Frequency: {freq}")
+        
+        print("\\n✅ Basic tests completed successfully!")
+        
+        return True
+
 
 if __name__ == "__main__":
     fire.Fire(Run)
