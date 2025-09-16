@@ -151,7 +151,12 @@ class VNStockCollector(BaseCollector, ABC):
 
         try:
             # Convert interval to vnstock format
-            vnstock_interval = "1m" if interval in ["1m", "1min"] else interval
+            if interval in ["1m", "1min"]:
+                vnstock_interval = "1m"
+            elif interval in ["1H", "1h"]:
+                vnstock_interval = "1H"
+            else:
+                vnstock_interval = interval
             
             # Create vnstock Quote object
             quote = Quote(symbol=symbol, source='VCI')
@@ -187,7 +192,12 @@ class VNStockCollector(BaseCollector, ABC):
         @deco_retry(retry_sleep=self.delay, retry=self.retry)
         def _get_simple(start_, end_):
             self.sleep()
-            _remote_interval = "1m" if interval == self.INTERVAL_1min else interval
+            if interval == self.INTERVAL_1min:
+                _remote_interval = "1m"
+            elif interval in ["1H", "1h"]:
+                _remote_interval = "1H"
+            else:
+                _remote_interval = interval
             resp = self.get_data_from_remote(
                 symbol,
                 interval=_remote_interval,
@@ -219,6 +229,20 @@ class VNStockCollector(BaseCollector, ABC):
                 _start = _tmp_end
             if _res:
                 _result = pd.concat(_res, sort=False).sort_values(["symbol", "date"])
+        elif interval in ["1H", "1h"]:
+            _res = []
+            _start = self.start_datetime
+            while _start < self.end_datetime:
+                # For hourly data, we can fetch larger time windows since hourly data is less granular
+                _tmp_end = min(_start + pd.Timedelta(days=30), self.end_datetime)
+                try:
+                    _resp = _get_simple(_start, _tmp_end)
+                    _res.append(_resp)
+                except ValueError as e:
+                    pass
+                _start = _tmp_end
+            if _res:
+                _result = pd.concat(_res, sort=False).sort_values(["symbol", "time"])
         else:
             raise ValueError(f"cannot support {self.interval}")
         return pd.DataFrame() if _result is None else _result
@@ -317,6 +341,62 @@ class VNStockCollectorVN1min(VNStockCollector):
 
     def download_index_data(self):
         pass
+
+
+class VNStockCollectorVN1H(VNStockCollector):
+    def get_instrument_list(self):
+        symbols = super(VNStockCollectorVN1H, self).get_instrument_list()
+        # Add Vietnamese indices for 1H data
+        return symbols + ["VNINDEX", "HNXINDEX", "UPCOMINDEX"]
+
+    def download_index_data(self):
+        # Download Vietnamese index data (VNINDEX, HNXINDEX, UPCOMINDEX) with 1H interval
+        logger.info("Downloading Vietnamese index data with 1H interval...")
+        for _index_name, _index_code in {"vnindex": "VNINDEX", "hnxindex": "HNXINDEX", "upcomindex": "UPCOMINDEX"}.items():
+            logger.info(f"get index data: {_index_name}({_index_code})......")
+            try:
+                quote = Quote(symbol=_index_code, source='VCI')
+                # convert datetime to str if needed
+                if isinstance(self.start_datetime, pd.Timestamp):
+                    self.start_datetime = self.start_datetime.strftime("%Y-%m-%d")
+                if isinstance(self.end_datetime, pd.Timestamp):
+                    self.end_datetime = self.end_datetime.strftime("%Y-%m-%d")
+                df = quote.history(start=self.start_datetime, end=self.end_datetime, interval='1H')
+                
+                if df is not None and not df.empty:
+                    # Rename columns to match qlib format if needed
+                    if 'date' in df.columns:
+                        df = df.rename(columns={'date': 'time'})
+                    
+                    # Ensure required columns exist
+                    required_cols = ['time', 'open', 'high', 'low', 'close', 'volume']
+                    for col in required_cols:
+                        if col not in df.columns:
+                            if col == 'volume':
+                                df[col] = 0  # Default volume for indices
+                            else:
+                                logger.warning(f"Missing column {col} for index {_index_code}")
+                    
+                    # Add adjclose and symbol columns
+                    df["adjclose"] = df["close"]
+                    df["symbol"] = _index_code.lower()
+                    
+                    # Save to file
+                    _path = self.save_dir.joinpath(f"{_index_code.lower()}.csv")
+                    if _path.exists():
+                        _old_df = pd.read_csv(_path)
+                        df = pd.concat([_old_df, df], sort=False)
+                        df = df.drop_duplicates(subset=['time'], keep='last')
+                    
+                    df.to_csv(_path, index=False)
+                    logger.info(f"Saved {len(df)} records for {_index_code}")
+                else:
+                    logger.warning(f"No data received for {_index_code}")
+                    
+            except Exception as e:
+                logger.warning(f"get {_index_name} error: {e}")
+                continue
+            time.sleep(1)  # Add delay between requests
 
 
 class VNStockNormalize(BaseNormalize):
@@ -537,15 +617,7 @@ class VNStockNormalize1min(VNStockNormalize, ABC):
         self.all_1d_data = D.features(D.instruments("all"), ["$paused", "$volume", "$factor", "$close"], freq="day")
 
     def _get_1d_calendar_list(self) -> Iterable[pd.Timestamp]:
-        return list(D.calendar(freq="day"))
-
-    @property
-    def calendar_list_1d(self):
-        calendar_list_1d = getattr(self, "_calendar_list_1d", None)
-        if calendar_list_1d is None:
-            calendar_list_1d = self._get_1d_calendar_list()
-            setattr(self, "_calendar_list_1d", calendar_list_1d)
-        return calendar_list_1d
+        return get_calendar_list("VN_ALL")
 
     def generate_1min_from_daily(self, calendars: Iterable) -> pd.Index:
         return generate_minutes_calendar_from_daily(
@@ -571,6 +643,64 @@ class VNStockNormalize1min(VNStockNormalize, ABC):
     @abc.abstractmethod
     def _get_1d_calendar_list(self) -> Iterable[pd.Timestamp]:
         raise NotImplementedError("rewrite _get_1d_calendar_list")
+
+
+class VNStockNormalize1H(VNStockNormalize, ABC):
+    """Normalised to 1H using local 1D data"""
+
+    AM_RANGE: tuple | None = None  # eg: ("09:30:00", "11:29:00")
+    PM_RANGE: tuple | None = None  # eg: ("13:00:00", "14:59:00")
+
+    # Whether the trading day of 1H data is consistent with 1D
+    CONSISTENT_1d = True
+    CALC_PAUSED_NUM = True
+
+    def __init__(
+        self, qlib_data_1d_dir: str | Path, date_field_name: str = "date", symbol_field_name: str = "symbol", **kwargs
+    ):
+        """
+
+        Parameters
+        ----------
+        qlib_data_1d_dir: str, Path
+            the qlib data to be updated for vnstock, usually from: Normalised to 1H using local 1D data
+        date_field_name: str
+            date field name, default is date
+        symbol_field_name: str
+            symbol field name, default is symbol
+        """
+        super(VNStockNormalize1H, self).__init__(date_field_name, symbol_field_name)
+        qlib.init(provider_uri=qlib_data_1d_dir)
+        self.all_1d_data = D.features(D.instruments("all"), ["$paused", "$volume", "$factor", "$close"], freq="day")
+
+    def _get_1d_calendar_list(self) -> Iterable[pd.Timestamp]:
+        return get_calendar_list("VN_ALL")
+
+    def generate_1H_from_daily(self, calendars: Iterable) -> pd.Index:
+        return generate_minutes_calendar_from_daily(
+            calendars, freq="1H", am_range=self.AM_RANGE, pm_range=self.PM_RANGE
+        )
+
+    def adjusted_price(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = calc_adjusted_price(
+            df=df,
+            _date_field_name=self._date_field_name,
+            _symbol_field_name=self._symbol_field_name,
+            frequence="1H",
+            consistent_1d=self.CONSISTENT_1d,
+            calc_paused=self.CALC_PAUSED_NUM,
+            _1d_data_all=self.all_1d_data,
+        )
+        return df
+
+    @abc.abstractmethod
+    def symbol_to_vnstock(self, symbol):
+        raise NotImplementedError("rewrite symbol_to_vnstock")
+
+    @abc.abstractmethod
+    def _get_1d_calendar_list(self) -> Iterable[pd.Timestamp]:
+        raise NotImplementedError("rewrite _get_1d_calendar_list")
+
 
 class VNStockNormalizeVN:
     def _get_calendar_list(self) -> Iterable[pd.Timestamp]:
@@ -696,6 +826,23 @@ class VNStockNormalizeVN1min(VNStockNormalizeVN, VNStockNormalize1min):
     def _get_1d_calendar_list(self) -> Iterable[pd.Timestamp]:
         return get_calendar_list("VN_ALL")
 
+
+class VNStockNormalizeVN1H(VNStockNormalizeVN, VNStockNormalize1H):
+    AM_RANGE = ("09:00:00", "11:30:00")  # Vietnamese market hours
+    PM_RANGE = ("13:00:00", "15:00:00")  # Vietnamese market hours
+
+    def _get_calendar_list(self) -> Iterable[pd.Timestamp]:
+        return self.generate_1H_from_daily(self.calendar_list_1d)
+
+    def symbol_to_vnstock(self, symbol):
+        # Vietnamese stocks don't need conversion like Chinese stocks
+        # VNStock uses direct symbol names
+        return symbol
+
+    def _get_1d_calendar_list(self) -> Iterable[pd.Timestamp]:
+        return get_calendar_list("VN_ALL")
+
+
 class Run(BaseRun):
     def __init__(self, source_dir=None, normalize_dir=None, max_workers=1, interval="1D", region="VN"):
         """
@@ -797,7 +944,7 @@ class Run(BaseRun):
                     $ python scripts/get_data.py qlib_data --target_dir <qlib_data_1d_dir> --interval 1D
                     $ python scripts/data_collector/vnstock/collector.py update_data_to_bin --qlib_data_1d_dir <qlib_data_1d_dir> --trading_date 2021-06-01
                 or:
-                    download 1D data, reference: https://github.com/microsoft/qlib/tree/main/scripts/data_collector/vnstock#1D-from-vnstock
+                    download 1D data, reference: https://github.com/microsoft/qlib/tree/main/scripts/data_collector/vnstock#1d-from-vnstock
 
         Examples
         ---------
@@ -1174,7 +1321,7 @@ class Run(BaseRun):
         if standardized_interval == "1D":
             # Use existing 1D extend method
             logger.info("Normalizing daily data...")
-            self.normalize_data_1d_extend(qlib_data_dir)
+            self.normalize_data_1d_extend(qlib_data_1d_dir)
         elif standardized_interval in ["1min", "5min", "30min", "1H", "6H"]:
             # For intraday data, we need 1D reference data for proper normalization
             logger.info(f"Normalizing {standardized_interval} intraday data...")
@@ -1212,156 +1359,6 @@ class Run(BaseRun):
         # For now, we'll skip this step as it requires additional implementation
         logger.info("Index constituent parsing not yet implemented for Vietnamese market")
         logger.info(f"Successfully updated data to binary format for interval: {standardized_interval}")
-
-    def update_data_to_bin_batch(
-        self,
-        qlib_data_dir: str,
-        intervals: list[str],
-        end_date: str | None = None,
-        check_data_length: int | None = None,
-        delay: float = 1,
-        exists_skip: bool = False,
-    ):
-        """Update vnstock data to bin format for multiple intervals in batch
-        
-        This function allows updating data for multiple time intervals in a single operation,
-        which is efficient for maintaining datasets across different timeframes.
-
-        Parameters
-        ----------
-        qlib_data_dir: str
-            The qlib data directory to be updated. This should contain the base data.
-        intervals: list[str]
-            List of intervals to update. 
-            Supported values: ["1D", "1d", "1min", "1m", "5m", "5min", "30m", "30min", "1h", "1H", "6h", "6H"]
-        end_date: str, optional
-            End datetime, default ``pd.Timestamp(trading_date + pd.Timedelta(days=1))``; 
-            open interval (excluding end)
-        check_data_length: int, optional
-            Check data length, if not None and greater than 0, each symbol will be considered 
-            complete if its data length is greater than or equal to this value, otherwise it 
-            will be fetched again, the maximum number of fetches being (max_collector_count). 
-            By default None.
-        delay: float
-            time.sleep(delay), default 1
-        exists_skip: bool
-            exists skip, by default False
-
-        Notes
-        -----
-            This function processes intervals in the following order for optimal efficiency:
-            1. Daily data first (1D) - as it's used as reference for intraday data
-            2. Intraday intervals in ascending order (1min, 5min, 30min, 1H, 6H)
-            
-            Each interval update is independent, so if one fails, others will continue.
-
-        Examples
-        --------
-            # Update multiple intervals
-            $ python collector.py update_data_to_bin_batch --qlib_data_dir <dir> --intervals 1D,1min,5min,1H
-            
-            # Update all supported intervals
-            $ python collector.py update_data_to_bin_batch --qlib_data_dir <dir> --intervals 1D,1min,5min,30min,1H,6H
-        """
-        if not intervals:
-            logger.warning("No intervals provided for batch update")
-            return
-        
-        logger.info(f"Starting batch update for intervals: {intervals}")
-        
-        # Validate all intervals first
-        validated_intervals = []
-        for interval in intervals:
-            try:
-                standardized_interval, _ = self._normalize_interval_format(interval)
-                validated_intervals.append((interval, standardized_interval))
-            except ValueError as e:
-                logger.error(f"Invalid interval '{interval}': {e}")
-                continue
-        
-        if not validated_intervals:
-            logger.error("No valid intervals found for batch update")
-            return
-        
-        # Sort intervals for optimal processing order
-        # Daily first, then intraday in ascending order
-        interval_order = ["1D", "1min", "5min", "30min", "1H", "6H"]
-        sorted_intervals = []
-        
-        for target_interval in interval_order:
-            for original, standardized in validated_intervals:
-                if standardized == target_interval:
-                    sorted_intervals.append((original, standardized))
-        
-        # Add any remaining intervals not in the standard order
-        for original, standardized in validated_intervals:
-            if not any(std == standardized for _, std in sorted_intervals):
-                sorted_intervals.append((original, standardized))
-        
-        successful_updates = []
-        failed_updates = []
-        
-        # Process each interval
-        for original_interval, standardized_interval in sorted_intervals:
-            try:
-                logger.info(f"Processing interval: {original_interval} -> {standardized_interval}")
-                self.update_data_to_bin_multi_interval(
-                    qlib_data_dir=qlib_data_dir,
-                    target_interval=original_interval,
-                    end_date=end_date,
-                    check_data_length=check_data_length,
-                    delay=delay,
-                    exists_skip=exists_skip
-                )
-                successful_updates.append(standardized_interval)
-                logger.info(f"✓ Successfully updated interval: {standardized_interval}")
-            except Exception as e:
-                logger.error(f"✗ Failed to update interval {standardized_interval}: {e}")
-                failed_updates.append((standardized_interval, str(e)))
-        
-        # Summary report
-        logger.info(f"Batch update completed:")
-        logger.info(f"  Successful: {len(successful_updates)} intervals - {successful_updates}")
-        if failed_updates:
-            logger.warning(f"  Failed: {len(failed_updates)} intervals")
-            for interval, error in failed_updates:
-                logger.warning(f"    {interval}: {error}")
-        else:
-            logger.info(f"  All intervals updated successfully!")
-
-    def _get_normalization_method_for_interval(self, interval: str, qlib_data_dir: str = None):
-        """Get the appropriate normalization method for a given interval
-        
-        Parameters
-        ----------
-        interval: str
-            The time interval (1D, 1d, 1min, 1m, etc.)
-        qlib_data_dir: str, optional
-            Required for minute-level data normalization
-            
-        Returns
-        -------
-        callable
-            The normalization method to use
-        """
-        interval_lower = interval.lower()
-        
-        if interval_lower in ["1d", "1D"]:
-            return lambda: self.normalize_data_1d_extend(qlib_data_dir)
-        elif interval_lower in ["1min", "1m"]:
-            if qlib_data_dir is None:
-                raise ValueError("qlib_data_dir is required for minute-level data normalization")
-            return lambda: self.normalize_data(
-                qlib_data_1d_dir=qlib_data_dir,
-                date_field_name="date", 
-                symbol_field_name="symbol"
-            )
-        else:
-            # Generic normalization for other intervals
-            return lambda: self.normalize_data(
-                date_field_name="date",
-                symbol_field_name="symbol"
-            )
 
     def update_data_to_bin_batch(
         self,
@@ -1461,7 +1458,7 @@ class Run(BaseRun):
         ['1D', '1d', '1min', '1m', '5m', '5min', '30m', '30min', '1h', '1H', '6h', '6H']
         """
         return ["1D", "1d", "1min", "1m", "5m", "5min", "30m", "30min", "1h", "1H", "6h", "6H"]
-    
+
     @classmethod
     def get_standardized_intervals(cls) -> list[str]:
         """Get list of standardized interval formats
