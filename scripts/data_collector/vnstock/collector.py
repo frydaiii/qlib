@@ -121,6 +121,8 @@ class VNStockCollector(BaseCollector, ABC):
             self.start_datetime = max(self.start_datetime, self.DEFAULT_START_DATETIME_1MIN)
         elif self.interval == self.INTERVAL_1d or self.interval == self.INTERVAL_1D:
             pass
+        elif self.interval == self.INTERVAL_1H or self.interval == self.INTERVAL_1h:
+            pass
         else:
             raise ValueError(f"interval error: {self.interval}")
 
