@@ -236,7 +236,7 @@ class VNStockCollector(BaseCollector, ABC):
             _start = self.start_datetime
             while _start < self.end_datetime:
                 # For hourly data, we can fetch larger time windows since hourly data is less granular
-                _tmp_end = min(_start + pd.Timedelta(days=30), self.end_datetime)
+                _tmp_end = min(_start + pd.Timedelta(days=3 * 252 * 30), self.end_datetime)
                 try:
                     _resp = _get_simple(_start, _tmp_end)
                     _res.append(_resp)
