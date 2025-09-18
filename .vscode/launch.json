@@ -39,9 +39,9 @@
             "args": [
                 "normalize_data",
                 "--source_dir",
-                "~/.qlib/vn_data_1d",
+                "~/.qlib/vn_data_1h",
                 "--normalize_dir",
-                "~/.qlib/vn_data_1d_nor",
+                "~/.qlib/vn_data_1h_nor",
                 "--interval",
                 "1D",
                 "--region",
@@ -63,9 +63,9 @@
             "args": [
                 "dump_all",
                 "--data_path",
-                "~/.qlib/vn_data_1d_nor",
+                "~/.qlib/vn_data_1h_nor",
                 "--qlib_dir",
-                "~/.qlib/qlib_data/vn_data",
+                "~/.qlib/qlib_data/vn_data_1h",
                 "--freq",
                 "day",
                 "--date_field_name",
@@ -92,9 +92,29 @@
                 "--index_name",
                 "VN30",
                 "--qlib_dir",
-                "~/.qlib/qlib_data/vn_data",
+                "~/.qlib/qlib_data/vn_data_1h",
                 "--method",
                 "parse_instruments"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "SETUPTOOLS_SCM_PRETEND_VERSION": "v0.0.1"
+            }
+        },
+        {
+            "name": "Update VNstock data",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/data_collector/vnstock/collector.py",
+            "console": "integratedTerminal",
+            "args": [
+                "update_data_to_bin_multi_interval",
+                "--qlib_data_dir",
+                "~/.qlib/qlib_data/vn_data_1h",
+                "--target_interval",
+                "1H",
+                "--date_field_name",
+                "time",
             ],
             "cwd": "${workspaceFolder}",
             "env": {
