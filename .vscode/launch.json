@@ -115,6 +115,8 @@
                 "1H",
                 "--date_field_name",
                 "time",
+                "--end_date",
+                "2025-09-18",
             ],
             "cwd": "${workspaceFolder}",
             "env": {
