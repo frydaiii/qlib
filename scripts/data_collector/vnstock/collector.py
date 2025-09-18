@@ -41,21 +41,29 @@ def get_vn_stock_symbols():
     """Get Vietnamese stock symbols using vnstock"""
     try:
         listing = Listing()
-        symbols_df = listing.all_symbols()
-        if isinstance(symbols_df, pd.DataFrame) and not symbols_df.empty:
-            # Assuming the symbol column is named 'symbol' or 'ticker'
-            symbol_col = None
-            for col in ['symbol', 'ticker', 'code']:
-                if col in symbols_df.columns:
-                    symbol_col = col
-                    break
+        # symbols_df = listing.all_symbols()
+        # if isinstance(symbols_df, pd.DataFrame) and not symbols_df.empty:
+        #     # Assuming the symbol column is named 'symbol' or 'ticker'
+        #     symbol_col = None
+        #     for col in ['symbol', 'ticker', 'code']:
+        #         if col in symbols_df.columns:
+        #             symbol_col = col
+        #             break
             
-            if symbol_col is not None:
-                symbols = symbols_df[symbol_col].tolist()
-                return symbols
-            else:
-                logger.warning("Cannot find symbol column in the data")
-                return []
+        #     if symbol_col is not None:
+        #         symbols = symbols_df[symbol_col].tolist()
+        #         return symbols
+        #     else:
+        #         logger.warning("Cannot find symbol column in the data")
+        #         return []
+        # else:
+        #     logger.warning("No symbol data available")
+        #     return []
+
+        symbols_ts = listing.symbols_by_group('HOSE') # Currently only HOSE is supported
+        if isinstance(symbols_ts, pd.Series) and not symbols_ts.empty:
+            symbols = symbols_ts.tolist()
+            return symbols
         else:
             logger.warning("No symbol data available")
             return []

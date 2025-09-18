@@ -13,7 +13,7 @@
             "args": [
                 "download_data",
                 "--source_dir",
-                "~/.qlib/vn_data_1d",
+                "~/.qlib/vn_data_1h",
                 "--start",
                 "2020-01-01",
                 "--end",
@@ -21,7 +21,7 @@
                 "--delay",
                 "1",
                 "--interval",
-                "1D",
+                "1H",
                 "--region",
                 "VN"
             ],
@@ -117,6 +117,8 @@
                 "time",
                 "--end_date",
                 "2025-09-18",
+                "--delay",
+                "1",
             ],
             "cwd": "${workspaceFolder}",
             "env": {
