@@ -86,6 +86,7 @@ class VNStockCollector(BaseCollector, ABC):
         delay=0,
         check_data_length: int | None = None,
         limit_nums: int | None = None,
+        symbols: list[str] | None = None,
     ):
         """
 
@@ -109,7 +110,10 @@ class VNStockCollector(BaseCollector, ABC):
             check data length, by default None
         limit_nums: int
             using for debug, by default None
+        symbols: list[str], optional
+            List of symbols to collect. If None, collects all available symbols.
         """
+        self.symbols = symbols
         super(VNStockCollector, self).__init__(
             save_dir=save_dir,
             start=start,
@@ -268,6 +272,9 @@ class VNStockCollector(BaseCollector, ABC):
         raise NotImplementedError("rewrite download_index_data")
 
     def get_instrument_list(self):
+        if hasattr(self, 'symbols') and self.symbols is not None:
+            logger.info(f"Using specified symbols: {self.symbols}")
+            return self.symbols
         logger.info("get VN stock symbols......")
         symbols = get_vn_stock_symbols()
         logger.info(f"get {len(symbols)} symbols.")
@@ -354,11 +361,6 @@ class VNStockCollectorVN1min(VNStockCollector):
 
 
 class VNStockCollectorVN1H(VNStockCollector):
-    def get_instrument_list(self):
-        symbols = super(VNStockCollectorVN1H, self).get_instrument_list()
-        # Add Vietnamese indices for 1H data
-        return symbols + ["VNINDEX", "HNXINDEX", "UPCOMINDEX"]
-
     def download_index_data(self):
         # Download Vietnamese index data (VNINDEX, HNXINDEX, UPCOMINDEX) with 1H interval
         logger.info("Downloading Vietnamese index data with 1H interval...")
@@ -928,7 +930,18 @@ class Run(BaseRun):
         if self.interval == "1D" and end is not None and pd.Timestamp(end) > pd.Timestamp(datetime.datetime.now().strftime("%Y-%m-%d")):
             raise ValueError(f"end_date: {end} is greater than the current date.")
 
-        super(Run, self).download_data(max_collector_count, int(delay), start, end, check_data_length or 0, limit_nums)
+        # Pass symbols parameter if available, otherwise let parent method handle default behavior
+        s_kwargs = {'symbols': self.symbols} if hasattr(self, 'symbols') and self.symbols is not None else {}
+        
+        super(Run, self).download_data(
+            max_collector_count, 
+            int(delay), 
+            start, 
+            end, 
+            check_data_length or 0, 
+            limit_nums, 
+            **s_kwargs
+        )
 
     def normalize_data(
         self,
@@ -1198,11 +1211,13 @@ class Run(BaseRun):
     def update_data_to_bin_multi_interval(
         self,
         qlib_data_dir: str,
-        target_interval: str = None,
+        target_interval: str | None = None,
         end_date: str | None = None,
         check_data_length: int | None = None,
         delay: float = 1,
         exists_skip: bool = False,
+        symbols: list[str] | None = None,
+        date_field_name: str = "time",
     ):
         """Update vnstock data to bin format supporting multiple time intervals
         
@@ -1228,6 +1243,8 @@ class Run(BaseRun):
             time.sleep(delay), default 1
         exists_skip: bool
             exists skip, by default False
+        symbols: list[str], optional
+            List of symbols to update. If None, updates all available symbols.
 
         Notes
         -----
@@ -1245,6 +1262,9 @@ class Run(BaseRun):
             # Update 1-minute data
             $ python collector.py update_data_to_bin_multi_interval --qlib_data_dir <dir> --target_interval 1min
             
+            # Update specific symbols for daily data
+            $ python collector.py update_data_to_bin_multi_interval --qlib_data_dir <dir> --target_interval 1D --symbols ["VNM", "VIC", "FPT"]
+            
             # Update 5-minute data
             $ python collector.py update_data_to_bin_multi_interval --qlib_data_dir <dir> --target_interval 5m
             
@@ -1257,6 +1277,8 @@ class Run(BaseRun):
             # Update 6-hour data
             $ python collector.py update_data_to_bin_multi_interval --qlib_data_dir <dir> --target_interval 6h
         """
+        
+        self.symbols = symbols
         
         # Use target_interval if provided, otherwise use instance interval
         interval = target_interval if target_interval is not None else self.interval
@@ -1331,20 +1353,20 @@ class Run(BaseRun):
         if standardized_interval == "1D":
             # Use existing 1D extend method
             logger.info("Normalizing daily data...")
-            self.normalize_data_1d_extend(qlib_data_1d_dir)
+            self.normalize_data_1d_extend(qlib_data_dir)
         elif standardized_interval in ["1min", "5min", "30min", "1H", "6H"]:
             # For intraday data, we need 1D reference data for proper normalization
             logger.info(f"Normalizing {standardized_interval} intraday data...")
             self.normalize_data(
                 qlib_data_1d_dir=qlib_data_dir,
-                date_field_name="date",
+                date_field_name=date_field_name,
                 symbol_field_name="symbol"
             )
         else:
             # Generic normalization for other intervals
             logger.info(f"Normalizing data for interval {standardized_interval}...")
             self.normalize_data(
-                date_field_name="date",
+                date_field_name=date_field_name,
                 symbol_field_name="symbol"
             )
 
@@ -1378,6 +1400,7 @@ class Run(BaseRun):
         check_data_length: int | None = None,
         delay: float = 1,
         exists_skip: bool = False,
+        symbols: list[str] | None = None,
     ):
         """Update vnstock data to bin format for multiple intervals in batch
         
@@ -1398,11 +1421,16 @@ class Run(BaseRun):
             Delay between data collection requests
         exists_skip: bool
             Skip if data already exists
+        symbols: list[str], optional
+            List of symbols to update for all intervals. If None, updates all available symbols.
 
         Examples
         --------
             # Update both daily and minute data
             $ python collector.py update_data_to_bin_batch --qlib_data_dir <dir> --intervals ["1D", "1min"]
+            
+            # Update specific symbols for multiple intervals
+            $ python collector.py update_data_to_bin_batch --qlib_data_dir <dir> --intervals ["1D", "1min"] --symbols ["VNM", "VIC"]
         """
         
         logger.info(f"Starting batch update for intervals: {intervals}")
@@ -1430,7 +1458,8 @@ class Run(BaseRun):
                     end_date=end_date,
                     check_data_length=check_data_length,
                     delay=delay,
-                    exists_skip=exists_skip
+                    exists_skip=exists_skip,
+                    symbols=symbols
                 )
                 results[interval] = "SUCCESS"
                 logger.info(f"Successfully completed update for interval: {interval}")

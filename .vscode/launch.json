@@ -119,6 +119,8 @@
                 "2025-09-18",
                 "--delay",
                 "1",
+                "--symbols",
+                "[\"VNM\", \"VIC\", \"FPT\"]",
             ],
             "cwd": "${workspaceFolder}",
             "env": {
