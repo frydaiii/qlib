@@ -43,7 +43,7 @@
                 "--normalize_dir",
                 "~/.qlib/vn_data_1h_nor",
                 "--interval",
-                "1D",
+                "1H",
                 "--region",
                 "VN",
                 "--date_field_name",
@@ -135,6 +135,24 @@
             "console": "integratedTerminal",
             "args": [
                 "examples/benchmarks/LSTM/workflow_config_lstm_Alpha158.yaml"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "SETUPTOOLS_SCM_PRETEND_VERSION": "v0.0.1"
+            }
+        },
+        {
+            "name": "Update vnstock daily data to bin",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/data_collector/vnstock/collector.py",
+            "console": "integratedTerminal",
+            "args": [
+                "update_data_to_bin",
+                "--qlib_data_1d_dir",
+                "~/.qlib/qlib_data/vn_data",
+                "--end_date",
+                "2025-09-19",
             ],
             "cwd": "${workspaceFolder}",
             "env": {
