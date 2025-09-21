@@ -429,7 +429,7 @@ class VNStockNormalize(BaseNormalize):
     def normalize_vnstock(
         df: pd.DataFrame,
         calendar_list: list | None = None,
-        date_field_name: str = "date",
+        date_field_name: str = "time",
         symbol_field_name: str = "symbol",
         last_close: float | None = None,
     ):
@@ -556,7 +556,7 @@ class VNStockNormalize1D(VNStockNormalize, ABC):
 
 class VNStockNormalize1DExtend(VNStockNormalize1D):
     def __init__(
-        self, old_qlib_data_dir: str | Path, date_field_name: str = "date", symbol_field_name: str = "symbol", **kwargs
+        self, old_qlib_data_dir: str | Path, date_field_name: str = "time", symbol_field_name: str = "symbol", **kwargs
     ):
         """
 
@@ -611,7 +611,7 @@ class VNStockNormalize1min(VNStockNormalize, ABC):
     CALC_PAUSED_NUM = True
 
     def __init__(
-        self, qlib_data_1d_dir: str | Path, date_field_name: str = "date", symbol_field_name: str = "symbol", **kwargs
+        self, qlib_data_1d_dir: str | Path, date_field_name: str = "time", symbol_field_name: str = "symbol", **kwargs
     ):
         """
 
@@ -668,7 +668,7 @@ class VNStockNormalize1H(VNStockNormalize, ABC):
     CALC_PAUSED_NUM = True
 
     def __init__(
-        self, qlib_data_1d_dir: str | Path, date_field_name: str = "date", symbol_field_name: str = "symbol", **kwargs
+        self, qlib_data_1d_dir: str | Path, date_field_name: str = "time", symbol_field_name: str = "symbol", **kwargs
     ):
         """
 
@@ -945,7 +945,7 @@ class Run(BaseRun):
 
     def normalize_data(
         self,
-        date_field_name: str = "date",
+        date_field_name: str = "time",
         symbol_field_name: str = "symbol",
         end_date: str | None = None,
         qlib_data_1d_dir: str | None = None,
@@ -984,7 +984,7 @@ class Run(BaseRun):
         )
 
     def normalize_data_1d_extend(
-        self, old_qlib_data_dir, date_field_name: str = "date", symbol_field_name: str = "symbol"
+        self, old_qlib_data_dir, date_field_name: str = "time", symbol_field_name: str = "symbol"
     ):
         """normalize data extend; extending vnstock qlib data(from: https://github.com/microsoft/qlib/tree/main/scripts#download-cn-data)
 
@@ -1143,6 +1143,7 @@ class Run(BaseRun):
             qlib_dir=qlib_data_1d_dir,
             exclude_fields="symbol,date",
             max_workers=self.max_workers,
+            date_field_name="time",
         )
         _dump.dump()
 
