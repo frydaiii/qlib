@@ -150,9 +150,9 @@
             "args": [
                 "update_data_to_bin",
                 "--qlib_data_1d_dir",
-                "~/.qlib/qlib_data/vn_data",
+                "~/.qlib/qlib_data/vn_data_1d",
                 "--end_date",
-                "2025-09-19",
+                "2025-10-01",
             ],
             "cwd": "${workspaceFolder}",
             "env": {
