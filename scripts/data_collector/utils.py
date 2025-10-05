@@ -46,6 +46,7 @@ _ALL_CALENDAR_LIST = None
 _HS_SYMBOLS = None
 _US_SYMBOLS = None
 _IN_SYMBOLS = None
+_VN_SYMBOLS = None
 _BR_SYMBOLS = None
 _EN_FUND_SYMBOLS = None
 _CALENDAR_MAP = {}
@@ -456,6 +457,80 @@ def get_in_stock_symbols(qlib_data_path: [str, Path] = None) -> list:
         _IN_SYMBOLS = sorted(set(_all_symbols))
 
     return _IN_SYMBOLS
+
+
+
+def get_vn_stock_symbols(qlib_data_path: [str, Path] = None) -> list:
+    """get Vietnam stock symbols
+
+    Returns
+    -------
+        stock symbols
+    """
+    global _VN_SYMBOLS  # pylint: disable=W0603
+
+    if _VN_SYMBOLS is None:
+        _all_symbols: List[str] = []
+
+        listing = None
+        try:
+            from vnstock import Listing  # type: ignore import
+        except ImportError as exc:
+            if qlib_data_path is None:
+                raise ImportError("vnstock package is required to collect Vietnamese symbols") from exc
+            logger.warning("vnstock package is required to collect Vietnamese symbols: %s", exc)
+        else:
+            try:
+                listing = Listing()
+            except Exception as err:  # pragma: no cover - vnstock raises generic errors
+                logger.warning(f"create Listing error: {err}")
+
+        if listing is not None:
+            floors = ["HOSE"]
+
+            @deco_retry
+            def _get_symbols_by_floor(floor: str):
+                symbols = listing.symbols_by_group(floor)
+                if symbols is None:
+                    return []
+                if hasattr(symbols, "tolist"):
+                    symbols = symbols.tolist()
+                return [str(s).strip() for s in symbols if str(s).strip()]
+
+            for floor in floors:
+                try:
+                    _all_symbols.extend(_get_symbols_by_floor(floor))
+                except Exception as err:  # pragma: no cover - keep collector resilient
+                    logger.warning(f"get {floor} stock symbols error: {err}")
+
+        if qlib_data_path is not None:
+            for _index in ["vnindex", "vn30"]:
+                ins_path = Path(qlib_data_path).joinpath(f"instruments/{_index}.txt")
+                if not ins_path.exists():
+                    continue
+                ins_df = pd.read_csv(
+                    ins_path,
+                    sep="\t",
+                    names=["symbol", "start_date", "end_date"],
+                )
+                _all_symbols += ins_df["symbol"].dropna().astype(str).tolist()
+
+        def _format(symbol: str):
+            symbol = str(symbol).strip().upper()
+            if not symbol:
+                return None
+            if symbol.endswith(".VN"):
+                return symbol
+            return f"{symbol}.VN"
+
+        formatted = [_format(symbol) for symbol in _all_symbols]
+        formatted = [s for s in formatted if s is not None]
+        _VN_SYMBOLS = sorted(set(formatted))
+
+        if not _VN_SYMBOLS:
+            raise ValueError("No Vietnamese symbols fetched. Please ensure vnstock is installed and accessible.")
+
+    return _VN_SYMBOLS
 
 
 def get_br_stock_symbols(qlib_data_path: [str, Path] = None) -> list:

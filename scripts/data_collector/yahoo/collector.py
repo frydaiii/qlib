@@ -38,6 +38,7 @@ from data_collector.utils import (
     get_us_stock_symbols,
     get_in_stock_symbols,
     get_br_stock_symbols,
+    get_vn_stock_symbols,
     generate_minutes_calendar_from_daily,
     calc_adjusted_price,
 )
@@ -362,6 +363,34 @@ class YahooCollectorBR1d(YahooCollectorBR):
 
 class YahooCollectorBR1min(YahooCollectorBR):
     retry = 2
+
+
+class YahooCollectorVN(YahooCollector, ABC):
+    def get_instrument_list(self):
+        logger.info("get VN stock symbols......")
+        symbols = list(get_vn_stock_symbols())
+        if "^VNINDEX.VN" not in symbols:
+            symbols.append("^VNINDEX.VN")
+        logger.info(f"get {len(symbols)} symbols.")
+        return symbols
+
+    def download_index_data(self):
+        pass
+
+    def normalize_symbol(self, symbol):
+        return code_to_fname(symbol).upper()
+
+    @property
+    def _timezone(self):
+        return "Asia/Ho_Chi_Minh"
+
+
+class YahooCollectorVN1d(YahooCollectorVN):
+    pass
+
+
+class YahooCollectorVN1min(YahooCollectorVN):
+    pass
 
 
 class YahooNormalize(BaseNormalize):
@@ -724,6 +753,33 @@ class YahooNormalizeBR1min(YahooNormalizeBR, YahooNormalize1min):
         return fname_to_code(symbol)
 
 
+class YahooNormalizeVN:
+    def _get_calendar_list(self) -> Iterable[pd.Timestamp]:
+        return get_calendar_list("VN_ALL")
+
+
+class YahooNormalizeVN1d(YahooNormalizeVN, YahooNormalize1d):
+    pass
+
+
+class YahooNormalizeVN1dExtend(YahooNormalizeVN, YahooNormalize1dExtend):
+    pass
+
+
+class YahooNormalizeVN1min(YahooNormalizeVN, YahooNormalize1min):
+    AM_RANGE = ("09:00:00", "11:30:00")
+    PM_RANGE = ("13:00:00", "15:00:00")
+
+    def _get_calendar_list(self) -> Iterable[pd.Timestamp]:
+        return self.generate_1min_from_daily(self.calendar_list_1d)
+
+    def _get_1d_calendar_list(self) -> Iterable[pd.Timestamp]:
+        return get_calendar_list("VN_ALL")
+
+    def symbol_to_yahoo(self, symbol):
+        return fname_to_code(symbol)
+
+
 class Run(BaseRun):
     def __init__(self, source_dir=None, normalize_dir=None, max_workers=1, interval="1d", region=REGION_CN):
         """
@@ -739,7 +795,7 @@ class Run(BaseRun):
         interval: str
             freq, value from [1min, 1d], default 1d
         region: str
-            region, value from ["CN", "US", "BR"], default "CN"
+            region, value from ["CN", "US", "IN", "BR", "VN"], default "CN"
         """
         super().__init__(source_dir, normalize_dir, max_workers, interval)
         self.region = region
