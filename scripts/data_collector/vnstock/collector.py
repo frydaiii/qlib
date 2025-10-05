@@ -200,6 +200,41 @@ class VNStockCollector(BaseCollector, ABC):
             )
             return None
 
+    def _add_calculated_fields(self, df: pd.DataFrame | None, interval: str) -> pd.DataFrame | None:
+        """Populate additional derived columns like VWAP at collection time."""
+        # VWAP calculation logic
+        # TODO: calculate vwap based on intraday data
+        if df is None or df.empty:
+            return df
+        if "vwap" in df.columns and df["vwap"].notna().any():
+            return df
+        if "volume" not in df.columns:
+            return df
+        if interval not in {self.INTERVAL_1D, self.INTERVAL_1d}:
+            return df
+
+        df = df.copy()
+        volume = pd.to_numeric(df["volume"], errors="coerce")
+        df["volume"] = volume
+        positive_volume = volume > 0
+
+        if "value" in df.columns:
+            trade_value = pd.to_numeric(df["value"], errors="coerce")
+            vwap_series = trade_value.divide(volume)
+            vwap_series.replace([np.inf, -np.inf], np.nan, inplace=True)
+        elif {"open", "high", "low", "close"}.issubset(df.columns):
+            open_price = pd.to_numeric(df["open"], errors="coerce")
+            high_price = pd.to_numeric(df["high"], errors="coerce")
+            low_price = pd.to_numeric(df["low"], errors="coerce")
+            close_price = pd.to_numeric(df["close"], errors="coerce")
+            vwap_series = (open_price + close_price + 2 * high_price + 2 * low_price) / 6
+        else:
+            vwap_series = pd.Series(np.nan, index=df.index, dtype="float64")
+
+        df["vwap"] = vwap_series
+        df.loc[~positive_volume, "vwap"] = np.nan
+        return df
+
     def get_data(
         self, symbol: str, interval: str, start_datetime: pd.Timestamp, end_datetime: pd.Timestamp
     ) -> pd.DataFrame:
@@ -259,6 +294,9 @@ class VNStockCollector(BaseCollector, ABC):
                 _result = pd.concat(_res, sort=False).sort_values(["symbol", "time"])
         else:
             raise ValueError(f"cannot support {self.interval}")
+
+        if _result is not None:
+            _result = self._add_calculated_fields(_result, interval)
         return pd.DataFrame() if _result is None else _result
 
     def collector_data(self):
@@ -412,7 +450,7 @@ class VNStockCollectorVN1H(VNStockCollector):
 
 
 class VNStockNormalize(BaseNormalize):
-    COLUMNS = ["open", "close", "high", "low", "volume"]
+    COLUMNS = ["open", "close", "high", "low", "vwap", "volume"]
     DAILY_FORMAT = "%Y-%m-%d"
 
     @staticmethod
