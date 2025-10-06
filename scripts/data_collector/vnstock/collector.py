@@ -8,8 +8,10 @@ import datetime
 import importlib
 from abc import ABC
 import multiprocessing
+from io import StringIO
 from pathlib import Path
 from typing import Iterable
+import unicodedata
 
 import fire
 import requests
@@ -74,6 +76,14 @@ def get_vn_stock_symbols():
 
 class VNStockCollector(BaseCollector, ABC):
     retry = 1  # Configuration attribute.  How many times will it try to re-request the data if the network fails.
+    MARKET_CAP_URL = "https://finance.vietstock.vn/data/ExportTradingResult"
+    _MARKET_CAP_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://finance.vietstock.vn/",
+    }
 
     def __init__(
         self,
@@ -200,6 +210,106 @@ class VNStockCollector(BaseCollector, ABC):
             )
             return None
 
+    @staticmethod
+    def _flatten_market_cap_column(column) -> str:
+        if isinstance(column, tuple):
+            parts = []
+            for part in column:
+                if isinstance(part, str):
+                    part = part.strip()
+                    if part and part not in parts:
+                        parts.append(part)
+            name = " ".join(parts)
+        else:
+            name = str(column)
+        try:
+            return name.encode("latin1").decode("utf-8")
+        except Exception:
+            return name
+
+    @staticmethod
+    def _normalize_market_cap_key(name: str) -> str:
+        normalized = unicodedata.normalize("NFKD", name)
+        ascii_name = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        ascii_name = ascii_name.lower().replace(" ", "_")
+        while "__" in ascii_name:
+            ascii_name = ascii_name.replace("__", "_")
+        return ascii_name
+
+    @classmethod
+    def _fetch_market_cap_frame(
+        cls, symbol: str | None, start_time: pd.Timestamp | None, end_time: pd.Timestamp | None
+    ) -> pd.DataFrame:
+        if symbol is None or start_time is None or end_time is None:
+            return pd.DataFrame(columns=["symbol", "time", "cap"])
+
+        start = pd.Timestamp(start_time).normalize()
+        end = pd.Timestamp(end_time).normalize()
+        if pd.isna(start) or pd.isna(end):
+            return pd.DataFrame(columns=["symbol", "time", "cap"])
+        if start > end:
+            start, end = end, start
+
+        days = (end - start).days + 1
+        page_size = max(min(days + 10, 5000), 200)
+
+        params = {
+            "Code": symbol,
+            "OrderBy": "",
+            "OrderDirection": "desc",
+            "PageIndex": 1,
+            "PageSize": page_size,
+            "FromDate": start.strftime("%Y-%m-%d"),
+            "ToDate": end.strftime("%Y-%m-%d"),
+            "ExportType": "excel",
+            "Cols": "TKLGD,TGTGD,VHTT,TGG,DC,TGPTG,KLGDKL,GTGDKL",
+            "ExchangeID": 1,
+        }
+
+        try:
+            response = requests.get(
+                cls.MARKET_CAP_URL, params=params, headers=cls._MARKET_CAP_HEADERS, timeout=30
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            logger.debug(f"Failed to fetch market cap for {symbol}: {exc}")
+            return pd.DataFrame(columns=["symbol", "time", "cap"])
+
+        try:
+            tables = pd.read_html(StringIO(response.text))
+        except ValueError as exc:
+            logger.debug(f"Failed to parse market cap table for {symbol}: {exc}")
+            return pd.DataFrame(columns=["symbol", "time", "cap"])
+
+        if not tables:
+            return pd.DataFrame(columns=["symbol", "time", "cap"])
+
+        table = tables[-1]
+        table.columns = [cls._flatten_market_cap_column(col) for col in table.columns]
+        column_keys = {col: cls._normalize_market_cap_key(col) for col in table.columns}
+        date_column = next((col for col, key in column_keys.items() if key.startswith("ngay")), None)
+        cap_column = next((col for col, key in column_keys.items() if "von_hoa" in key), None)
+
+        if date_column is None or cap_column is None:
+            logger.debug(f"Missing expected columns in market cap response for {symbol}")
+            return pd.DataFrame(columns=["symbol", "time", "cap"])
+
+        result = table.loc[:, [date_column, cap_column]].copy()
+        result[date_column] = pd.to_datetime(result[date_column], format="%d/%m/%Y", errors="coerce")
+        result = result.dropna(subset=[date_column])
+        result[cap_column] = (
+            result[cap_column]
+            .astype(str)
+            .str.replace(",", "", regex=False)
+            .str.replace(r"[^0-9.]", "", regex=True)
+        )
+        result[cap_column] = pd.to_numeric(result[cap_column], errors="coerce")
+        result = result.drop_duplicates(subset=[date_column], keep="first")
+        result.rename(columns={date_column: "time", cap_column: "cap"}, inplace=True)
+        result["symbol"] = symbol
+        result.sort_values("time", inplace=True)
+        return result[["symbol", "time", "cap"]]
+
     def _add_calculated_fields(self, df: pd.DataFrame | None, interval: str) -> pd.DataFrame | None:
         """Populate additional derived columns like VWAP at collection time."""
         # VWAP calculation logic
@@ -214,6 +324,9 @@ class VNStockCollector(BaseCollector, ABC):
             return df
 
         df = df.copy()
+        time_col = "time" if "time" in df.columns else "date" if "date" in df.columns else None
+        if time_col is not None:
+            df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
         volume = pd.to_numeric(df["volume"], errors="coerce")
         df["volume"] = volume
         positive_volume = volume > 0
@@ -233,6 +346,27 @@ class VNStockCollector(BaseCollector, ABC):
 
         df["vwap"] = vwap_series
         df.loc[~positive_volume, "vwap"] = np.nan
+
+        # cap - market capitalization calculation logic
+        if time_col is not None and "symbol" in df.columns:
+            valid_time = df[time_col].dropna()
+            symbol = df.loc[df["symbol"].first_valid_index(), "symbol"] if df["symbol"].first_valid_index() is not None else None
+            if symbol is not None and not valid_time.empty:
+                cap_frame = self._fetch_market_cap_frame(symbol, valid_time.min(), valid_time.max())
+                if not cap_frame.empty:
+                    cap_frame = cap_frame.rename(columns={"time": time_col, "cap": "cap_new"})
+                    df = df.merge(cap_frame, on=["symbol", time_col], how="left")
+                    if "cap_new" in df.columns:
+                        if "cap" in df.columns:
+                            df["cap"] = pd.to_numeric(df["cap"], errors="coerce").combine_first(df["cap_new"])
+                        else:
+                            df.rename(columns={"cap_new": "cap"}, inplace=True)
+                        if "cap_new" in df.columns:
+                            df.drop(columns=["cap_new"], inplace=True)
+                if "cap" not in df.columns:
+                    df["cap"] = np.nan
+        if "cap" in df.columns:
+            df["cap"] = pd.to_numeric(df["cap"], errors="coerce")
         return df
 
     def get_data(
@@ -450,7 +584,7 @@ class VNStockCollectorVN1H(VNStockCollector):
 
 
 class VNStockNormalize(BaseNormalize):
-    COLUMNS = ["open", "close", "high", "low", "vwap", "volume"]
+    COLUMNS = ["open", "close", "high", "low", "vwap", "volume", "cap"]
     DAILY_FORMAT = "%Y-%m-%d"
 
     @staticmethod
