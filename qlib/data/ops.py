@@ -1383,6 +1383,56 @@ class EMA(Rolling):
         return series
 
 
+class Adv(ExpressionOps):
+    """Average Daily Dollar Volume
+
+    Parameters
+    ----------
+    N : int
+        rolling window size. When set to 0, fall back to expanding window.
+    price_feature : Expression, optional
+        price feature used to translate volume into dollar notional. Defaults to ``$close``.
+    volume_feature : Expression, optional
+        volume feature that will be combined with ``price_feature``. Defaults to ``$volume``.
+    value_feature : Expression, optional
+        Precomputed dollar value feature. If not provided, it will be derived from
+        ``price_feature * volume_feature``.
+
+    Returns
+    ----------
+    Expression
+        rolling average of dollar volume
+    """
+
+    def __init__(self, N, price_feature=None, volume_feature=None, value_feature=None):
+        if price_feature is None:
+            price_feature = Feature("close")
+        if volume_feature is None:
+            volume_feature = Feature("volume")
+
+        self.N = N
+        self.price_feature = price_feature
+        self.volume_feature = volume_feature
+
+        if value_feature is None:
+            value_feature = Mul(self.price_feature, self.volume_feature)
+
+        self.value_feature = value_feature
+        self._rolling_expr = Mean(self.value_feature, self.N)
+
+    def __str__(self):
+        return f"adv{self.N}"
+
+    def _load_internal(self, instrument, start_index, end_index, *args):
+        return self._rolling_expr.load(instrument, start_index, end_index, *args)
+
+    def get_longest_back_rolling(self):
+        return self._rolling_expr.get_longest_back_rolling()
+
+    def get_extended_window_size(self):
+        return self._rolling_expr.get_extended_window_size()
+
+
 #################### Pair-Wise Rolling ####################
 class PairRolling(ExpressionOps):
     """Pair Rolling Operator
@@ -1585,6 +1635,7 @@ OpsList = [
     Count,
     EMA,
     WMA,
+    Adv,
     Corr,
     Cov,
     Delta,
