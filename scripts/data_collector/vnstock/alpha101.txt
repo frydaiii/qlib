@@ -8,7 +8,6 @@ Alpha#5: (rank((open - (sum(vwap, 10) / 10))) * (-1 * abs(rank((close - vwap))))
 Alpha#6: (-1 * correlation(open, volume, 10))
 Alpha#7: ((adv20 < volume) ? ((-1 * ts_rank(abs(delta(close, 7)), 60)) * sign(delta(close, 7))) : (-1
 * 1)) 
-9
 Alpha#8: (-1 * rank(((sum(open, 5) * sum(returns, 5)) - delay((sum(open, 5) * sum(returns, 5)),
 10))))
 Alpha#9: ((0 < ts_min(delta(close, 1), 5)) ? delta(close, 1) : ((ts_max(delta(close, 1), 5) < 0) ?
@@ -38,7 +37,6 @@ Alpha#23: (((sum(high, 20) / 20) < high) ? (-1 * delta(high, 2)) : 0)
 Alpha#24: ((((delta((sum(close, 100) / 100), 100) / delay(close, 100)) < 0.05) ||
 ((delta((sum(close, 100) / 100), 100) / delay(close, 100)) == 0.05)) ? (-1 * (close - ts_min(close,
 100))) : (-1 * delta(close, 3))) 
-10
 Alpha#25: rank(((((-1 * returns) * adv20) * vwap) * (high - close)))
 Alpha#26: (-1 * ts_max(correlation(ts_rank(volume, 5), ts_rank(high, 5), 5), 3))
 Alpha#27: ((0.5 < rank((sum(correlation(rank(volume), rank(vwap), 6), 2) / 2.0))) ? (-1 * 1) : 1)
@@ -66,7 +64,6 @@ Alpha#40: ((-1 * rank(stddev(high, 10))) * correlation(high, volume, 10))
 Alpha#41: (((high * low)^0.5) - vwap)
 Alpha#42: (rank((vwap - close)) / rank((vwap + close)))
 Alpha#43: (ts_rank((volume / adv20), 20) * ts_rank((-1 * delta(close, 7)), 8)) 
-11
 Alpha#44: (-1 * correlation(high, rank(volume), 5))
 Alpha#45: (-1 * ((rank((sum(delay(close, 5), 20) / 20)) * correlation(close, volume, 2)) *
 rank(correlation(sum(close, 5), sum(close, 20), 2))))
@@ -96,7 +93,6 @@ Alpha#59: (-1 * Ts_Rank(decay_linear(correlation(IndNeutralize(((vwap * 0.728317
 (1 - 0.728317))), IndClass.industry), volume, 4.25197), 16.2289), 8.19648))
 Alpha#60: (0 - (1 * ((2 * scale(rank(((((close - low) - (high - close)) / (high - low)) * volume)))) -
 scale(rank(ts_argmax(close, 10)))))) 
-12
 Alpha#61: (rank((vwap - ts_min(vwap, 16.1219))) < rank(correlation(vwap, adv180, 17.9282)))
 Alpha#62: ((rank(correlation(vwap, sum(adv20, 22.4101), 9.91009)) < rank(((rank(open) +
 rank(open)) < (rank(((high + low) / 2)) + rank(high))))) * -1)
@@ -128,7 +124,6 @@ rank(decay_linear(correlation(Ts_Rank(vwap, 3.72469), Ts_Rank(volume, 18.5188), 
 Alpha#73: (max(rank(decay_linear(delta(vwap, 4.72775), 2.91864)),
 Ts_Rank(decay_linear(((delta(((open * 0.147155) + (low * (1 - 0.147155))), 2.03608) / ((open *
 0.147155) + (low * (1 - 0.147155)))) * -1), 3.33829), 16.7411)) * -1) 
-13
 Alpha#74: ((rank(correlation(close, sum(adv30, 37.4843), 15.1365)) <
 rank(correlation(rank(((high * 0.0261661) + (vwap * (1 - 0.0261661)))), rank(volume), 11.4791)))
 * -1)
@@ -160,7 +155,6 @@ Alpha#85: (rank(correlation(((high * 0.876703) + (close * (1 - 0.876703))), adv3
 7.11408)))
 Alpha#86: ((Ts_Rank(correlation(close, sum(adv20, 14.7444), 6.00049), 20.4195) < rank(((open
 + close) - (vwap + open)))) * -1) 
-14
 Alpha#87: (max(rank(decay_linear(delta(((close * 0.369701) + (vwap * (1 - 0.369701))),
 1.91233), 2.65461)), Ts_Rank(decay_linear(abs(correlation(IndNeutralize(adv81,
 IndClass.industry), close, 13.4132)), 4.89768), 14.4535)) * -1)
@@ -191,7 +185,6 @@ Ts_Rank(adv60, 4.13242), 3.65459), 12.6556), 14.0365), 13.4143)) * -1)
 Alpha#97: ((rank(decay_linear(delta(IndNeutralize(((low * 0.721001) + (vwap * (1 - 0.721001))),
 IndClass.industry), 3.3705), 20.4523)) - Ts_Rank(decay_linear(Ts_Rank(correlation(Ts_Rank(low,
 7.87871), Ts_Rank(adv60, 17.255), 4.97547), 18.5925), 15.7152), 6.71659)) * -1) 
-15
 Alpha#98: (rank(decay_linear(correlation(vwap, sum(adv5, 26.4719), 4.58418), 7.18088)) -
 rank(decay_linear(Ts_Rank(Ts_ArgMin(correlation(rank(open), rank(adv15), 20.8187), 8.62571),
 6.95668), 8.07206)))
@@ -221,7 +214,6 @@ sectors, etc.), i.e., x is cross-sectionally demeaned within each group g
 ts_{O}(x, d) = operator O applied across the time-series for the past d days; non-integer number
 of days d is converted to floor(d)
 ts_min(x, d) = time-series min over the past d days
-16
 ts_max(x, d) = time-series max over the past d days
 ts_argmax(x, d) = which day ts_max(x, d) occurred on
 ts_argmin(x, d) = which day ts_min(x, d) occurred on
