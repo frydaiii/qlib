@@ -433,6 +433,77 @@ class VNStockCollector(BaseCollector, ABC):
             _result = self._add_calculated_fields(_result, interval)
         return pd.DataFrame() if _result is None else _result
 
+    def _validate_recent_daily_data(
+        self, symbol: str, df: pd.DataFrame | None
+    ) -> pd.DataFrame | None:
+        if df is None or df.empty:
+            return df
+        if self.interval not in {self.INTERVAL_1D, self.INTERVAL_1d}:
+            return df
+
+        time_column = "time" if "time" in df.columns else "date" if "date" in df.columns else None
+        if time_column is None:
+            logger.warning(
+                f"{symbol}: skip saving because daily data has no time column"
+            )
+            return None
+
+        validated = df.copy()
+        validated[time_column] = pd.to_datetime(validated[time_column], errors="coerce")
+        validated = validated.dropna(subset=[time_column])
+        if validated.empty:
+            logger.warning(f"{symbol}: skip saving because no valid timestamps were found")
+            return None
+
+        validated = validated.sort_values(time_column)
+        validated = validated.drop_duplicates(subset=[time_column], keep="last")
+        recent = validated.tail(10)
+        if len(recent) < 10:
+            logger.warning(
+                f"{symbol}: skip saving because only {len(recent)} trading days were found; expected at least 10"
+            )
+            return None
+
+        newest = recent[time_column].iloc[-1]
+        oldest = recent[time_column].iloc[0]
+        if pd.isna(newest) or pd.isna(oldest):
+            logger.warning(
+                f"{symbol}: skip saving because recent trading days contain invalid timestamps"
+            )
+            return None
+        if (newest - oldest).days > 14:
+            logger.warning(
+                f"{symbol}: skip saving because recent trading days contain a gap larger than two weeks"
+            )
+            return None
+
+        validation_slice = recent.copy()
+        numeric_cols = [
+            col
+            for col in VNStockNormalize.COLUMNS
+            if col in validation_slice.columns
+        ]
+        problematic_cols = []
+        for col in numeric_cols:
+            validation_slice[col] = pd.to_numeric(validation_slice[col], errors="coerce")
+            if validation_slice[col].isna().any():
+                problematic_cols.append(col)
+        if problematic_cols:
+            logger.warning(
+                f"{symbol}: skip saving because columns {problematic_cols} contain NaN values in the last 10 days"
+            )
+            return None
+
+        validated[time_column] = validated[time_column].dt.strftime("%Y-%m-%d")
+        return validated
+
+    def save_instrument(self, symbol, df: pd.DataFrame):
+        validated_df = self._validate_recent_daily_data(symbol, df)
+        if validated_df is None or validated_df.empty:
+            logger.warning(f"{symbol}: skip saving because data failed recent-day validation")
+            return
+        super().save_instrument(symbol, validated_df)
+
     def collector_data(self):
         """collector data"""
         super(VNStockCollector, self).collector_data()
