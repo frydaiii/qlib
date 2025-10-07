@@ -27,7 +27,11 @@ def mock_listing(monkeypatch):
     import vnstock
 
     class FakeListing:
+        industries_calls = 0
+        group_calls = 0
+
         def symbols_by_industries(self):
+            FakeListing.industries_calls += 1
             return pd.DataFrame(
                 {
                     "symbol": ["AAA", "BBB", "CCC"],
@@ -39,12 +43,15 @@ def mock_listing(monkeypatch):
 
         def symbols_by_group(self, group):
             assert group == "HOSE"
+            FakeListing.group_calls += 1
             return pd.Series(["AAA", "BBB", "CCC"], name="symbol")
 
     monkeypatch.setattr(vnstock, "Listing", FakeListing)
     IndNeutralize._industries_df = None
     IndNeutralize._hose_symbols = None
     IndNeutralize._mapping_cache.clear()
+    IndNeutralize._group_cache.clear()
+    yield FakeListing
 
 
 @pytest.fixture
@@ -81,3 +88,9 @@ def test_ind_neutralize_returns_nan_for_unknown_symbol(dummy_feature):
 def test_ind_neutralize_validates_level(dummy_feature):
     with pytest.raises(ValueError):
         IndNeutralize(dummy_feature, 1)
+
+
+def test_group_symbols_cached(mock_listing, dummy_feature):
+    IndNeutralize(dummy_feature, 2)
+    IndNeutralize(dummy_feature, 3)
+    assert mock_listing.group_calls == 1

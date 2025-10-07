@@ -246,6 +246,7 @@ class IndNeutralize(ElemOperator):
     _industries_df: Optional[pd.DataFrame] = None
     _hose_symbols: Optional[Set[str]] = None
     _mapping_cache: Dict[str, Tuple[Dict[str, str], Dict[str, List[str]]]] = {}
+    _group_cache: Dict[str, Set[str]] = {}
 
     def __init__(self, feature, level: int):
         super().__init__(feature)
@@ -270,22 +271,50 @@ class IndNeutralize(ElemOperator):
         except ImportError as exc:  # pragma: no cover - dependency missing
             raise ImportError("IndNeutralize requires the 'vnstock' package") from exc
 
-        listing = Listing()
-        industries = listing.symbols_by_industries()
-        if not isinstance(industries, pd.DataFrame):
-            raise TypeError("symbols_by_industries must return a pandas DataFrame")
-        if "symbol" not in industries.columns:
-            raise KeyError("symbols_by_industries must provide a 'symbol' column")
+        listing = None
+        if cls._industries_df is None:
+            listing = Listing()
+            industries = listing.symbols_by_industries()
+            if not isinstance(industries, pd.DataFrame):
+                raise TypeError("symbols_by_industries must return a pandas DataFrame")
+            if "symbol" not in industries.columns:
+                raise KeyError("symbols_by_industries must provide a 'symbol' column")
+            industries_df = industries.copy()
+            industries_df["symbol"] = industries_df["symbol"].astype(str).str.upper()
+            cls._industries_df = industries_df
 
-        industries_df = industries.copy()
-        industries_df["symbol"] = industries_df["symbol"].astype(str).str.upper()
+        if cls._hose_symbols is None:
+            cls._hose_symbols = cls._get_group_symbols("HOSE", listing=listing)
 
-        hose_symbols = listing.symbols_by_group("HOSE")
-        hose_series = pd.Series(hose_symbols)
-        hose_symbol_set = set(hose_series.dropna().astype(str).str.upper())
+    @classmethod
+    def _get_group_symbols(cls, group: str, listing=None) -> Set[str]:
+        if group in cls._group_cache:
+            return cls._group_cache[group]
+        if listing is None:
+            try:
+                from vnstock import Listing  # type: ignore import
+            except ImportError as exc:  # pragma: no cover - dependency missing
+                raise ImportError("IndNeutralize requires the 'vnstock' package") from exc
+            listing = Listing()
+        raw = listing.symbols_by_group(group)
+        if isinstance(raw, pd.Series):
+            iterable = raw.dropna().tolist()
+        elif isinstance(raw, pd.DataFrame):
+            if "symbol" not in raw.columns:
+                raise KeyError("symbols_by_group DataFrame must include a 'symbol' column")
+            iterable = raw["symbol"].dropna().tolist()
+        elif isinstance(raw, (list, tuple, set)):
+            iterable = [item for item in raw if item is not None]
+        else:
+            raise TypeError("symbols_by_group must return a pandas Series/DataFrame or a sequence")
 
-        cls._industries_df = industries_df
-        cls._hose_symbols = hose_symbol_set
+        symbols: Set[str] = set()
+        for sym in iterable:
+            sym_str = str(sym).strip()
+            if sym_str:
+                symbols.add(sym_str.upper())
+        cls._group_cache[group] = symbols
+        return symbols
 
     @classmethod
     def _build_mappings(cls, code_column: str):
