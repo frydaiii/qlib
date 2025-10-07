@@ -10,7 +10,7 @@ from collections import OrderedDict
 import numpy as np
 import pandas as pd
 
-from typing import Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Dict, List, Optional, Tuple, Type, Union
 from scipy.stats import percentileofscore
 from .base import Expression, ExpressionOps, Feature, PFeature
 from ..log import get_module_logger
@@ -246,9 +246,7 @@ class IndNeutralize(ElemOperator):
 
     _LEVEL_TO_COLUMN = {2: "icb_code2", 3: "icb_code3", 4: "icb_code4"}
     _industries_df: Optional[pd.DataFrame] = None
-    _hose_symbols: Optional[Set[str]] = None
-    _mapping_cache: Dict[str, Tuple[Dict[str, str], Dict[str, List[str]]]] = {}
-    _group_cache: Dict[str, Set[str]] = {}
+    _mapping_cache: Dict[Tuple[str, str], Tuple[Dict[str, str], Dict[str, List[str]]]] = {}
 
     def __init__(self, feature, level: int):
         super().__init__(feature)
@@ -256,7 +254,6 @@ class IndNeutralize(ElemOperator):
             raise ValueError("IndNeutralize level must be one of {2, 3, 4}")
         self.level = level
         self._code_column = self._LEVEL_TO_COLUMN[level]
-        self._symbol_to_code, self._code_to_symbols = self._build_mappings(self._code_column)
 
     @staticmethod
     def _normalize_symbol(symbol: str) -> str:
@@ -266,71 +263,54 @@ class IndNeutralize(ElemOperator):
 
     @classmethod
     def _ensure_base_data(cls):
-        if cls._industries_df is not None and cls._hose_symbols is not None:
+        if cls._industries_df is not None:
             return
         try:
             from vnstock import Listing  # type: ignore import
         except ImportError as exc:  # pragma: no cover - dependency missing
             raise ImportError("IndNeutralize requires the 'vnstock' package") from exc
 
-        listing = None
-        if cls._industries_df is None:
-            listing = Listing()
-            industries = listing.symbols_by_industries()
-            if not isinstance(industries, pd.DataFrame):
-                raise TypeError("symbols_by_industries must return a pandas DataFrame")
-            if "symbol" not in industries.columns:
-                raise KeyError("symbols_by_industries must provide a 'symbol' column")
-            industries_df = industries.copy()
-            industries_df["symbol"] = industries_df["symbol"].astype(str).str.upper()
-            cls._industries_df = industries_df
-
-        if cls._hose_symbols is None:
-            cls._hose_symbols = cls._get_group_symbols("HOSE", listing=listing)
+        listing = Listing()
+        industries = listing.symbols_by_industries()
+        if not isinstance(industries, pd.DataFrame):
+            raise TypeError("symbols_by_industries must return a pandas DataFrame")
+        if "symbol" not in industries.columns:
+            raise KeyError("symbols_by_industries must provide a 'symbol' column")
+        industries_df = industries.copy()
+        industries_df["symbol"] = industries_df["symbol"].astype(str).str.upper()
+        cls._industries_df = industries_df
 
     @classmethod
-    def _get_group_symbols(cls, group: str, listing=None) -> Set[str]:
-        if group in cls._group_cache:
-            return cls._group_cache[group]
-        if listing is None:
-            try:
-                from vnstock import Listing  # type: ignore import
-            except ImportError as exc:  # pragma: no cover - dependency missing
-                raise ImportError("IndNeutralize requires the 'vnstock' package") from exc
-            listing = Listing()
-        raw = listing.symbols_by_group(group)
-        if isinstance(raw, pd.Series):
-            iterable = raw.dropna().tolist()
-        elif isinstance(raw, pd.DataFrame):
-            if "symbol" not in raw.columns:
-                raise KeyError("symbols_by_group DataFrame must include a 'symbol' column")
-            iterable = raw["symbol"].dropna().tolist()
-        elif isinstance(raw, (list, tuple, set)):
-            iterable = [item for item in raw if item is not None]
-        else:
-            raise TypeError("symbols_by_group must return a pandas Series/DataFrame or a sequence")
-
-        symbols: Set[str] = set()
-        for sym in iterable:
-            sym_str = str(sym).strip()
-            if sym_str:
-                symbols.add(sym_str.upper())
-        cls._group_cache[group] = symbols
-        return symbols
-
-    @classmethod
-    def _build_mappings(cls, code_column: str):
+    def _build_mappings(cls, code_column: str, freq: Optional[str]):
         cls._ensure_base_data()
-        if cls._industries_df is None or cls._hose_symbols is None:
+        if cls._industries_df is None:
             raise RuntimeError("vnstock listing information is not available")
 
-        if code_column in cls._mapping_cache:
-            return cls._mapping_cache[code_column]
+        freq_key = str(freq) if freq is not None else "day"
+        cache_key = (code_column, freq_key)
+        if cache_key in cls._mapping_cache:
+            return cls._mapping_cache[cache_key]
+
+        universe = CSRank._get_instrument_universe(freq)
+        if not universe:
+            cls._mapping_cache[cache_key] = ({}, {})
+            return cls._mapping_cache[cache_key]
+
+        normalized_universe: Dict[str, List[str]] = {}
+        for instrument in universe:
+            norm = cls._normalize_symbol(instrument)
+            if not isinstance(norm, str):
+                continue
+            normalized_universe.setdefault(norm, [])
+            if instrument not in normalized_universe[norm]:
+                normalized_universe[norm].append(instrument)
+
+        if not normalized_universe:
+            cls._mapping_cache[cache_key] = ({}, {})
+            return cls._mapping_cache[cache_key]
 
         industries_df = cls._industries_df
-        hose_symbols = cls._hose_symbols
-
-        filtered = industries_df[industries_df["symbol"].isin(hose_symbols)].copy()
+        filtered = industries_df[industries_df["symbol"].isin(normalized_universe.keys())].copy()
         if code_column not in filtered.columns:
             raise KeyError(f"symbols_by_industries missing expected column '{code_column}'")
 
@@ -339,28 +319,42 @@ class IndNeutralize(ElemOperator):
         filtered = filtered[filtered[code_column] != ""]
 
         symbol_to_code = filtered.set_index("symbol")[code_column].to_dict()
-        code_to_symbols = filtered.groupby(code_column)["symbol"].apply(list).to_dict()
+        code_to_symbols: Dict[str, List[str]] = {}
+        for symbol, code in symbol_to_code.items():
+            instruments = list(normalized_universe.get(symbol, []))
+            if not instruments:
+                instruments = [symbol]
+            uniq_instruments: List[str] = []
+            for inst in instruments:
+                if inst not in uniq_instruments:
+                    uniq_instruments.append(inst)
+            existing = code_to_symbols.setdefault(code, [])
+            for inst in uniq_instruments:
+                if inst not in existing:
+                    existing.append(inst)
 
-        cls._mapping_cache[code_column] = (symbol_to_code, code_to_symbols)
-        return cls._mapping_cache[code_column]
+        cls._mapping_cache[cache_key] = (symbol_to_code, code_to_symbols)
+        return cls._mapping_cache[cache_key]
 
     def _load_symbol_series(self, symbol: str, instrument: str, start_index, end_index, args):
         try:
             return self.feature.load(symbol, start_index, end_index, *args)
         except Exception:
-            if symbol == self._normalize_symbol(instrument):
+            if self._normalize_symbol(symbol) == self._normalize_symbol(instrument):
                 return self.feature.load(instrument, start_index, end_index, *args)
             raise
 
     def _load_internal(self, instrument, start_index, end_index, *args):
+        freq = args[0] if args else None
+        symbol_to_code, code_to_symbols = self._build_mappings(self._code_column, freq)
         target_series = self.feature.load(instrument, start_index, end_index, *args)
         norm_symbol = self._normalize_symbol(instrument)
-        code = self._symbol_to_code.get(norm_symbol)
+        code = symbol_to_code.get(norm_symbol)
 
         if code is None:
             return pd.Series(np.nan, index=target_series.index, dtype=float)
 
-        group_symbols = self._code_to_symbols.get(code)
+        group_symbols = code_to_symbols.get(code)
         if not group_symbols:
             return pd.Series(np.nan, index=target_series.index, dtype=float)
 
@@ -376,15 +370,15 @@ class IndNeutralize(ElemOperator):
         if not data:
             return pd.Series(np.nan, index=target_series.index, dtype=float)
 
-        if norm_symbol not in data:
-            data[norm_symbol] = target_series
+        if instrument not in data:
+            data[instrument] = target_series
 
         df = pd.DataFrame(data)
-        if df.empty or norm_symbol not in df:
+        if df.empty or instrument not in df:
             return pd.Series(np.nan, index=target_series.index, dtype=float)
 
         group_mean = df.mean(axis=1)
-        neutralized = df[norm_symbol] - group_mean
+        neutralized = df[instrument] - group_mean
         neutralized.name = str(self)
         return neutralized.reindex(target_series.index)
 

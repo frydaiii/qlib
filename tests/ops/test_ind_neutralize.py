@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from qlib.data.base import Expression
-from qlib.data.ops import IndNeutralize
+from qlib.data.ops import CSRank, IndNeutralize
 
 
 class DummyFeature(Expression):
@@ -23,12 +23,11 @@ class DummyFeature(Expression):
 
 
 @pytest.fixture(autouse=True)
-def mock_listing(monkeypatch):
+def mock_dependencies(monkeypatch):
     import vnstock
 
     class FakeListing:
         industries_calls = 0
-        group_calls = 0
 
         def symbols_by_industries(self):
             FakeListing.industries_calls += 1
@@ -41,17 +40,18 @@ def mock_listing(monkeypatch):
                 }
             )
 
-        def symbols_by_group(self, group):
-            assert group == "HOSE"
-            FakeListing.group_calls += 1
-            return pd.Series(["AAA", "BBB", "CCC"], name="symbol")
+    class UniverseTracker:
+        calls = 0
+
+    def fake_get_instrument_universe(cls, freq=None):
+        UniverseTracker.calls += 1
+        return ["AAA", "BBB", "CCC"]
 
     monkeypatch.setattr(vnstock, "Listing", FakeListing)
+    monkeypatch.setattr(CSRank, "_get_instrument_universe", classmethod(fake_get_instrument_universe))
     IndNeutralize._industries_df = None
-    IndNeutralize._hose_symbols = None
     IndNeutralize._mapping_cache.clear()
-    IndNeutralize._group_cache.clear()
-    yield FakeListing
+    yield FakeListing, UniverseTracker
 
 
 @pytest.fixture
@@ -90,7 +90,13 @@ def test_ind_neutralize_validates_level(dummy_feature):
         IndNeutralize(dummy_feature, 1)
 
 
-def test_group_symbols_cached(mock_listing, dummy_feature):
-    IndNeutralize(dummy_feature, 2)
-    IndNeutralize(dummy_feature, 3)
-    assert mock_listing.group_calls == 1
+def test_instrument_universe_cached(mock_dependencies, dummy_feature):
+    listing_tracker, universe_tracker = mock_dependencies
+    op_level2 = IndNeutralize(dummy_feature, 2)
+    op_level3 = IndNeutralize(dummy_feature, 3)
+
+    op_level2.load("AAA", None, None, "day")
+    op_level3.load("BBB", None, None, "day")
+
+    assert listing_tracker.industries_calls == 1
+    assert universe_tracker.calls == 1
