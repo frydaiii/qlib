@@ -82,8 +82,8 @@ This document compares the operators defined in `alpha101.txt` with their implem
 - **Issue**: 
   - Alpha101's `rank(x)` is a **cross-sectional** operator (ranks across stocks)
   - Qlib's `Rank` is a **time-series** operator (ranks within rolling window for single stock)
-  - **Correct implementation** exists in `CSRankNorm` processor (processor.py:327)
-- **Recommendation**: Use `CSRankNorm` processor for alpha101-style cross-sectional ranking
+- **Correct implementation** now exists both in the `CSRank` operator (ops.py) and the `CSRankNorm` processor (processor.py:327)
+- **Recommendation**: Use `CSRank` in expression definitions when you need Alpha101-style cross-sectional ranks inside formulas, and `CSRankNorm` when normalising datasets during preprocessing
 
 #### ❌ `scale(x, a)` - Cross-Sectional Scale
 - **Alpha101**: "rescaled x such that sum(abs(x)) = a (default a = 1)"
@@ -247,7 +247,7 @@ Qlib provides several additional operators not defined in Alpha101:
 - **Qlib `Rank(feature, N)`**: Time-series (ranks within rolling window for each stock)
 
 **Correct Usage for Alpha101 Formulas**:
-- For cross-sectional `rank(x)`: Use `CSRankNorm` processor in data preprocessing
+- For cross-sectional `rank(x)`: Use the `CSRank` operator in expressions, or `CSRankNorm` processor when normalising datasets
 - For time-series `ts_rank(x, d)`: Use `Rank(feature, d)` operator
 
 ### 2. Missing Critical Operators
@@ -264,12 +264,20 @@ For full Alpha101 implementation, the following are needed:
 
 **For Cross-Sectional Operations** (like `rank`, `scale`, `indneutralize`):
 ```python
-# Use processors in dataset configuration
+# Option A: Use operator directly in expressions
+from qlib.data.ops import CSRank, Feature
+
+cross_sectional_rank = CSRank(Feature("close"))
+
+# Option B: Use processors in dataset configuration
 from qlib.data.dataset.processor import CSRankNorm
 
 processors = [
     {"class": "CSRankNorm", "kwargs": {"fields_group": "feature"}}
 ]
+
+# Unit tests covering `CSRank`
+# - tests/ops/test_csrank.py
 ```
 
 **For Time-Series Operations** (like `ts_rank`, `delay`, `correlation`):
@@ -293,7 +301,7 @@ corr_feature = Corr(Feature("close"), Feature("volume"), 20)
 
 | Alpha101 Function | Qlib Operator | Usage Context | Compatibility |
 |-------------------|---------------|---------------|---------------|
-| `rank(x)` | `CSRankNorm` processor | Cross-sectional | ⚠️ Use processor, not Rank operator |
+| `rank(x)` | `CSRank` / `CSRankNorm` | Cross-sectional | ✅ Direct mapping via operator or processor |
 | `ts_rank(x, d)` | `Rank(x, d)` | Time-series | ✅ Direct mapping |
 | `delay(x, d)` | `Ref(x, d)` | Time-series | ✅ Direct mapping |
 | `delta(x, d)` | `Delta(x, d)` | Time-series | ✅ Direct mapping |
@@ -309,15 +317,15 @@ corr_feature = Corr(Feature("close"), Feature("volume"), 20)
 
 ## Conclusion
 
-Qlib provides a comprehensive set of operators that cover most Alpha101 requirements, with **90% compatibility** (27 out of 30 operators). However, there are critical semantic differences:
+Qlib provides a comprehensive set of operators that cover most Alpha101 requirements, with **93% compatibility** (28 out of 30 operators). However, there are critical semantic differences:
 
-1. **Main Issue**: `rank(x)` has different meanings in Alpha101 (cross-sectional) vs Qlib (time-series)
-2. **Workaround**: Use `CSRankNorm` processor for cross-sectional ranking
+1. **Resolution**: `rank(x)` now maps directly to the `CSRank` operator for cross-sectional ranking
+2. **Alternative**: `CSRankNorm` processor remains available for dataset-level normalisation
 3. **Missing**: Only 2 operators need custom implementation (`scale`, `signedpower`, `product`)
 4. **Good News**: `decay_linear` is already implemented as `WMA`
 
 For implementing Alpha101 formulas in qlib, you should:
-1. Use **processors** for cross-sectional operations (rank, scale, neutralize)
+1. Use **operators** (e.g., `CSRank`, `IndNeutralize`) for cross-sectional expressions inside formulas; apply **processors** like `CSRankNorm` when operating on datasets
 2. Use **operators** for time-series operations (ts_rank, correlation, rolling stats)
 3. Use `WMA` for `decay_linear` operations
 4. Implement custom functions for the 2 missing operators if needed

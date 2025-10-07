@@ -5,6 +5,8 @@
 from __future__ import division
 from __future__ import print_function
 
+from collections import OrderedDict
+
 import numpy as np
 import pandas as pd
 
@@ -385,6 +387,134 @@ class IndNeutralize(ElemOperator):
         neutralized = df[norm_symbol] - group_mean
         neutralized.name = str(self)
         return neutralized.reindex(target_series.index)
+
+
+class CSRank(ElemOperator):
+    """Cross-Sectional Rank
+
+    Computes the percentile rank of each value across all instruments at each
+    timestamp, matching the Alpha101 ``rank(x)`` operator semantics.
+
+    Parameters
+    ----------
+    feature : Expression
+        Feature expression to rank.
+
+    Returns
+    -------
+    Expression
+        Cross-sectional percentile rank (0 to 1) for each value at each
+        timestamp.
+    """
+
+    _result_cache: "OrderedDict[Tuple[int, int, Optional[str]], Dict[str, pd.Series]]" = OrderedDict()
+    _instrument_cache: Dict[str, List[str]] = {}
+    _MAX_CACHE_KEYS = 16
+
+    def __init__(self, feature):
+        super().__init__(feature)
+
+    @classmethod
+    def _get_instrument_universe(cls, freq: Optional[str]) -> List[str]:
+        freq_key = str(freq) if freq is not None else "day"
+        if freq_key not in cls._instrument_cache:
+            instruments: List[str] = []
+            try:
+                from qlib.data import Inst  # type: ignore
+            except Exception as exc:  # pragma: no cover - logging path only
+                get_module_logger(cls.__name__).debug(
+                    "Unable to import instrument provider for CSRank: %s", exc
+                )
+            else:
+                try:
+                    inst_conf = Inst.instruments("all")
+                    instruments = list(Inst.list_instruments(inst_conf, freq=freq_key, as_list=True) or [])
+                except Exception as exc:  # pragma: no cover - logging path only
+                    get_module_logger(cls.__name__).debug(
+                        "Unable to list instruments for CSRank(freq=%s): %s", freq_key, exc
+                    )
+            cls._instrument_cache[freq_key] = [str(sym) for sym in instruments]
+        return cls._instrument_cache[freq_key]
+
+    @staticmethod
+    def _empty_like(series: pd.Series, name: str) -> pd.Series:
+        empty = pd.Series(np.nan, index=series.index, dtype=float)
+        empty.name = name
+        return empty
+
+    @classmethod
+    def _store_cache(cls, cache_key: Tuple[int, int, Optional[str]], data: Dict[str, pd.Series]):
+        cls._result_cache[cache_key] = {sym: s.copy() for sym, s in data.items()}
+        cls._result_cache.move_to_end(cache_key)
+        while len(cls._result_cache) > cls._MAX_CACHE_KEYS:
+            cls._result_cache.popitem(last=False)
+
+    def _build_cross_sectional_cache(
+        self,
+        cache_key: Tuple[int, int, Optional[str]],
+        instrument: str,
+        start_index,
+        end_index,
+        freq: Optional[str],
+        args: Tuple,
+    ) -> Dict[str, pd.Series]:
+        logger = get_module_logger(self.__class__.__name__)
+        target_series = self.feature.load(instrument, start_index, end_index, *args)
+        if target_series.empty:
+            result = {instrument: self._empty_like(target_series, str(self))}
+            self._store_cache(cache_key, result)
+            return self._result_cache[cache_key]
+
+        universe = self._get_instrument_universe(freq)
+        data: Dict[str, pd.Series] = {}
+        for symbol in universe:
+            if symbol == instrument:
+                data[symbol] = target_series
+                continue
+            try:
+                series = self.feature.load(symbol, start_index, end_index, *args)
+            except Exception as exc:  # pragma: no cover - logging path only
+                logger.debug("Skipping symbol %s in CSRank due to error: %s", symbol, exc)
+                continue
+            if series is None or series.empty:
+                continue
+            data[symbol] = series
+
+        if instrument not in data:
+            data[instrument] = target_series
+
+        if not data:
+            result = {instrument: self._empty_like(target_series, str(self))}
+            self._store_cache(cache_key, result)
+            return self._result_cache[cache_key]
+
+        df = pd.DataFrame(data).dropna(axis=1, how="all")
+        if df.empty or instrument not in df:
+            result = {instrument: self._empty_like(target_series, str(self))}
+            self._store_cache(cache_key, result)
+            return self._result_cache[cache_key]
+
+        ranked = df.rank(axis=1, pct=True, method="average").reindex(target_series.index)
+        result_map = {sym: ranked[sym].rename(str(self)) for sym in ranked.columns}
+        self._store_cache(cache_key, result_map)
+        return self._result_cache[cache_key]
+
+    def _load_internal(self, instrument, start_index, end_index, *args):
+        freq = args[0] if args else None
+        cache_key = (start_index, end_index, freq)
+        cached = self._result_cache.get(cache_key)
+        if cached is None:
+            cached = self._build_cross_sectional_cache(cache_key, instrument, start_index, end_index, freq, args)
+        else:
+            self._result_cache.move_to_end(cache_key)
+
+        result = cached.get(instrument)
+        if result is not None:
+            return result
+
+        series = self.feature.load(instrument, start_index, end_index, *args)
+        return self._empty_like(series, str(self))
+
 
 class PairOperator(ExpressionOps):
     """Pair-wise operator
@@ -1818,6 +1948,7 @@ OpsList = [
     Ne,
     Mask,
     IndNeutralize,
+    CSRank,
     IdxMax,
     IdxMin,
     If,
