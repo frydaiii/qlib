@@ -51,17 +51,18 @@ This document compares the operators defined in `alpha101.txt` with their implem
 ### 2. Comparison Operators
 
 #### ✅ `>`, `<`, `==` - Standard Comparisons
-- **Alpha101**: Standard comparison operators
+- **Alpha101**: Standard comparison operators that return boolean masks
 - **Qlib**: 
-  - `class Greater(NpPairOperator)` - Line 709 (returns max of two values)
-  - `class Less(NpPairOperator)` - Line 729 (returns min of two values)
   - `class Gt(NpPairOperator)` - Line 749 (boolean >)
   - `class Ge(NpPairOperator)` - Line 769 (boolean >=)
   - `class Lt(NpPairOperator)` - Line 789 (boolean <)
   - `class Le(NpPairOperator)` - Line 809 (boolean <=)
   - `class Eq(NpPairOperator)` - Line 829 (boolean ==)
   - `class Ne(NpPairOperator)` - Line 849 (boolean !=)
-- **Status**: ✅ **Correctly Implemented**
+  - `class Greater(NpPairOperator)` - Line 709 (element-wise max, **not** the Alpha101 `>` operator)
+  - `class Less(NpPairOperator)` - Line 729 (element-wise min, **not** the Alpha101 `<` operator)
+- **Status**: ✅ **Correctly Implemented** for boolean comparators
+- **Notes**: Use `Gt`/`Ge`/`Lt`/`Le`/`Eq`/`Ne` for Alpha101 semantics; `Greater`/`Less` are convenience helpers for max/min aggregation.
 
 #### ✅ `||`, `x ? y : z` - Logical and Conditional
 - **Alpha101**: OR operator and ternary conditional
@@ -82,7 +83,7 @@ This document compares the operators defined in `alpha101.txt` with their implem
 - **Details**: 
   - Alpha101's `rank(x)` is a **cross-sectional** operator (ranks across stocks)
   - Qlib's `CSRank` correctly implements this behavior
-  - Returns percentile rank (0 to 1) across all instruments at each timestamp
+  - Returns percentile rank in the open interval (0, 1] across all instruments at each timestamp
   - Uses caching for performance optimization
 - **Note**: The `Rank(Rolling)` class (Line 1415) is a **different operator** that implements `ts_rank(x, d)` (time-series rank)
 - **Usage**: `CSRank(Feature("close"))` for cross-sectional ranking in expressions
