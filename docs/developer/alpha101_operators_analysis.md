@@ -9,9 +9,9 @@ This document compares the operators defined in `alpha101.txt` with their implem
 | Basic Math | 7 | 7 | 0 | 0 |
 | Comparison | 5 | 5 | 0 | 0 |
 | Time-Series | 8 | 8 | 0 | 0 |
-| Rolling Stats | 4 | 3 | 0 | 1 |
-| Special | 6 | 4 | 0 | 2 |
-| **Total** | **30** | **27** | **0** | **3** |
+| Rolling Stats | 4 | 4 | 0 | 0 |
+| Special | 6 | 6 | 0 | 0 |
+| **Total** | **30** | **30** | **0** | **0** |
 
 ---
 
@@ -88,12 +88,11 @@ This document compares the operators defined in `alpha101.txt` with their implem
 - **Note**: The `Rank(Rolling)` class (Line 1415) is a **different operator** that implements `ts_rank(x, d)` (time-series rank)
 - **Usage**: `CSRank(Feature("close"))` for cross-sectional ranking in expressions
 
-#### ❌ `scale(x, a)` - Cross-Sectional Scale
+#### ✅ `scale(x, a)` - Cross-Sectional Scale
 - **Alpha101**: "rescaled x such that sum(abs(x)) = a (default a = 1)"
-- **Qlib**: **NOT IMPLEMENTED** as operator
-- **Status**: ❌ **MISSING**
-- **Notes**: This is a cross-sectional normalization operation
-- **Workaround**: Can be implemented using data processors or custom expressions
+- **Qlib**: `class Scale(ElemOperator)` - Line 472
+- **Status**: ✅ **Correctly Implemented**
+- **Notes**: Loads the full universe per timestamp, rescales each cross-section so `sum(abs(x)) = a`, caches results per window, and defaults to `a = 1.0`. Only numeric targets are supported, aligning with Alpha101 usage.
 
 ---
 
@@ -165,11 +164,11 @@ This document compares the operators defined in `alpha101.txt` with their implem
 - **Qlib**: `class Sum(Rolling)` - Line 1132
 - **Status**: ✅ **Correctly Implemented**
 
-#### ❌ `product(x, d)` - Time-Series Product
+#### ✅ `product(x, d)` - Time-Series Product
 - **Alpha101**: "time-series product over the past d days"
-- **Qlib**: **NOT FOUND as dedicated class**
-- **Status**: ❌ **MISSING as dedicated operator**
-- **Workaround**: Could be implemented using rolling.apply(np.prod)
+- **Qlib**: `class Product(Rolling)` - Line 1195
+- **Status**: ✅ **Correctly Implemented**
+- **Notes**: Uses rolling product with a safe fallback to `rolling.apply(np.prod)` for older pandas builds. Raises a `ValueError` when asked for exponential windows (`0 < d < 1`), matching Alpha101's integer window semantics.
 
 #### ✅ `stddev(x, d)` - Moving Standard Deviation
 - **Alpha101**: "moving time-series standard deviation over the past d days"
@@ -185,14 +184,13 @@ This document compares the operators defined in `alpha101.txt` with their implem
 
 ### 6. Special Operators
 
-#### ❌ `signedpower(x, a)` - Signed Power
-- **Alpha101**: "x^a" (presumably preserving sign)
-- **Qlib**: `class Power(NpPairOperator)` - Line 609
-- **Status**: ❌ **MISSING signed version**
-- **Notes**: 
-  - Qlib has `Power` but not signed power
-  - Signed power preserves sign: `sign(x) * |x|^a`
-  - Referenced as `SignedPower` in Alpha#1 and Alpha#84
+#### ✅ `signedpower(x, a)` - Signed Power
+- **Alpha101**: "x^a" (preserving the original sign of `x`)
+- **Qlib**: `class SignedPower(PairOperator)` - Line 624
+- **Status**: ✅ **Correctly Implemented**
+- **Notes**:
+  - Computes `sign(x) * |x|^a`, supports scalar or expression exponents, and validates length mismatches for easier debugging.
+  - Referenced in Alpha#1 and Alpha#84 and now directly supported without custom workarounds.
 
 #### ✅ `decay_linear(x, d)` - Linear Decay Weighted Average
 - **Alpha101**: "weighted moving average over the past d days with linearly decaying weights d, d-1, ..., 1 (rescaled to sum up to 1)"
@@ -266,15 +264,15 @@ from qlib.data.ops import Rank, Feature
 time_series = Rank(Feature("close"), 10)
 ```
 
-### 2. Missing Critical Operators
+### 2. Coverage Updates
 
-For full Alpha101 implementation, the following are needed:
+The Alpha101 operators that were previously missing are now part of core Qlib:
 
-1. **`scale(x, a)`**: Cross-sectional normalization (sum of abs values = a)
-2. **`SignedPower(x, a)`**: Power preserving sign
-3. **`product(x, d)`**: Rolling product
+- **`scale(x, a)`** → `Scale(x, a)` handles numeric targets with cross-sectional caching.
+- **`signedpower(x, a)`** → `SignedPower(x, a)` keeps the sign while exponentiating magnitudes.
+- **`product(x, d)`** → `Product(x, d)` computes rolling products with a backward-compatible pandas fallback.
 
-**Note**: `decay_linear` is implemented as `WMA` (Weighted Moving Average).
+`decay_linear` continues to map to the existing `WMA` operator.
 
 ### 3. Implementation Recommendations
 
@@ -317,10 +315,10 @@ corr_feature = Corr(Feature("close"), Feature("volume"), 20)
 | `delta(x, d)` | `Delta(x, d)` | Time-series | 1467 | ✅ Direct mapping |
 | `correlation(x, y, d)` | `Corr(x, y, d)` | Time-series | 1801 | ✅ Direct mapping |
 | `covariance(x, y, d)` | `Cov(x, y, d)` | Time-series | 1834 | ✅ Direct mapping |
-| `scale(x, a)` | - | Cross-sectional | - | ❌ Not implemented |
-| `signedpower(x, a)` | - | Element-wise | - | ❌ Not implemented |
+| `scale(x, a)` | `Scale(x, a)` | Cross-sectional | 472 | ✅ Direct mapping |
+| `signedpower(x, a)` | `SignedPower(x, a)` | Element-wise | 624 | ✅ Direct mapping |
 | `decay_linear(x, d)` | `WMA(x, d)` | Time-series | 1600 | ✅ Direct mapping |
-| `product(x, d)` | - | Time-series | - | ❌ Not implemented |
+| `product(x, d)` | `Product(x, d)` | Time-series | 1195 | ✅ Direct mapping |
 | `indneutralize(x, g)` | `IndNeutralize(x, g)` | Cross-sectional | 235 | ✅ VN-specific impl |
 | `adv{d}` | `Adv(d)` | Time-series | 1671 | ✅ Direct mapping |
 
@@ -328,37 +326,33 @@ corr_feature = Corr(Feature("close"), Feature("volume"), 20)
 
 ## Conclusion
 
-Qlib provides a comprehensive set of operators that cover most Alpha101 requirements, with **90% compatibility** (27 out of 30 operators correctly implemented).
+Qlib now provides a comprehensive set of operators that cover every Alpha101 requirement, delivering **100% compatibility** (30 out of 30 operators correctly implemented).
 
-### ✅ Correctly Implemented (27/30)
+### ✅ Correctly Implemented (30/30)
 
-1. **Cross-Sectional Operators**: `CSRank` (Line 386), `IndNeutralize` (Line 235)
-2. **Time-Series Operators**: All major operators including `Rank/ts_rank`, `Ref/delay`, `Delta`, `Corr`, `Cov`, etc.
-3. **Rolling Statistics**: `Sum`, `Mean`, `Std`, `Min`, `Max`, `IdxMax`, `IdxMin`
-4. **Special Operators**: `WMA/decay_linear`, `Adv`, `EMA`
-5. **Basic Math**: All standard operations (`abs`, `log`, `sign`, arithmetic, comparisons)
-
-### ❌ Missing Operators (3/30)
-
-1. **`scale(x, a)`**: Cross-sectional normalization (sum of abs = a)
-2. **`signedpower(x, a)`**: Power function preserving sign
-3. **`product(x, d)`**: Rolling product over window
+1. **Cross-Sectional Operators**: `CSRank` (Line 386), `Scale` (Line 472), `IndNeutralize` (Line 235)
+2. **Time-Series Operators**: Full suite including `Rank/ts_rank`, `Ref/delay`, `Delta`, `Corr`, `Cov`, `Product`, etc.
+3. **Rolling Statistics**: `Sum`, `Product`, `Mean`, `Std`, `Min`, `Max`, `IdxMax`, `IdxMin`
+4. **Special Operators**: `WMA/decay_linear`, `Adv`, `EMA`, `SignedPower`
+5. **Basic Math & Logic**: All standard element-wise, arithmetic, and comparison operators
 
 ### Key Takeaways
 
 1. **Naming Clarity**: 
    - `CSRank` → Alpha101's `rank(x)` (cross-sectional)
    - `Rank` → Alpha101's `ts_rank(x, d)` (time-series)
-   
-2. **Implementation Quality**: All implemented operators match Alpha101 specifications with proper NaN handling, edge case management, and performance optimizations
+   - `Scale` → Alpha101's `scale(x, a)` cross-sectional normalisation
+
+2. **Implementation Quality**: All operators match Alpha101 specifications with proper NaN handling, edge case management, caching, and performance optimisations.
 
 3. **For Alpha101 Formulas**:
    - Use `CSRank(feature)` for cross-sectional ranking
    - Use `Rank(feature, N)` for time-series ranking
    - Use `WMA` for `decay_linear` operations
-   - Implement custom functions only for the 3 missing operators if needed
+   - Use `Scale(feature, a)` for Alpha101's `scale(x, a)` normalisation
+   - Use `SignedPower(left, right)` when you need `signedpower`
 
-4. **Industry Neutralization**: Available but specific to Vietnamese stocks (ICB codes); adaptable for other markets
+4. **Industry Neutralization**: Available but specific to Vietnamese stocks (ICB codes); adaptable for other markets.
 
 ---
 

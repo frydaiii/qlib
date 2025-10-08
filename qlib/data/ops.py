@@ -6,6 +6,7 @@ from __future__ import division
 from __future__ import print_function
 
 from collections import OrderedDict
+from numbers import Number
 
 import numpy as np
 import pandas as pd
@@ -510,6 +511,120 @@ class CSRank(ElemOperator):
         return self._empty_like(series, str(self))
 
 
+class Scale(ElemOperator):
+    """Cross-Sectional Scale
+
+    Rescales each timestamp's cross-section so that the sum of absolute values
+    equals the specified target (default ``1``), mirroring Alpha101's
+    ``scale`` operator.
+    """
+
+    _result_cache: "OrderedDict[Tuple[int, int, Optional[str], float], Dict[str, pd.Series]]" = OrderedDict()
+    _MAX_CACHE_KEYS = 16
+
+    def __init__(self, feature, target: Union[Number, None] = 1.0):
+        super().__init__(feature)
+        if target is None:
+            target = 1.0
+        if not isinstance(target, Number):
+            raise TypeError("Scale target must be numeric or None")
+        self._target_value = float(target)
+
+    def __str__(self):
+        if np.isclose(self._target_value, 1.0):
+            return "{}({})".format(type(self).__name__, self.feature)
+        return "{}({},{})".format(type(self).__name__, self.feature, self._target_value)
+
+    @staticmethod
+    def _empty_like(series: pd.Series, name: str) -> pd.Series:
+        empty = pd.Series(np.nan, index=series.index, dtype=float)
+        empty.name = name
+        return empty
+
+    @classmethod
+    def _store_cache(cls, cache_key: Tuple[int, int, Optional[str], float], data: Dict[str, pd.Series]):
+        cls._result_cache[cache_key] = {sym: s.copy() for sym, s in data.items()}
+        cls._result_cache.move_to_end(cache_key)
+        while len(cls._result_cache) > cls._MAX_CACHE_KEYS:
+            cls._result_cache.popitem(last=False)
+
+    def _cache_key(self, start_index, end_index, freq: Optional[str]) -> Tuple[int, int, Optional[str], float]:
+        return (start_index, end_index, freq, self._target_value)
+
+    def _build_cross_sectional_cache(
+        self,
+        cache_key: Tuple[int, int, Optional[str], float],
+        instrument: str,
+        start_index,
+        end_index,
+        freq: Optional[str],
+        args: Tuple,
+    ) -> Dict[str, pd.Series]:
+        logger = get_module_logger(self.__class__.__name__)
+        base_series = self.feature.load(instrument, start_index, end_index, *args)
+        if base_series is None or base_series.empty:
+            result = {instrument: self._empty_like(base_series, str(self))}
+            self._store_cache(cache_key, result)
+            return self._result_cache[cache_key]
+
+        universe = CSRank._get_instrument_universe(freq)
+        data: Dict[str, pd.Series] = {}
+        for symbol in universe:
+            if symbol == instrument:
+                data[symbol] = base_series
+                continue
+            try:
+                series = self.feature.load(symbol, start_index, end_index, *args)
+            except Exception as exc:  # pragma: no cover - logging path only
+                logger.debug("Skipping symbol %s in Scale due to error: %s", symbol, exc)
+                continue
+            if series is None or series.empty:
+                continue
+            data[symbol] = series
+
+        if instrument not in data:
+            data[instrument] = base_series
+
+        if not data:
+            result = {instrument: self._empty_like(base_series, str(self))}
+            self._store_cache(cache_key, result)
+            return self._result_cache[cache_key]
+
+        df = pd.DataFrame(data).dropna(axis=1, how="all")
+        if df.empty or instrument not in df:
+            result = {instrument: self._empty_like(base_series, str(self))}
+            self._store_cache(cache_key, result)
+            return self._result_cache[cache_key]
+
+        df = df.reindex(base_series.index)
+
+        abs_sum = df.abs().sum(axis=1)
+        denom = abs_sum.replace(0.0, np.nan)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            scale_factor = self._target_value / denom
+        scale_factor = scale_factor.replace([np.inf, -np.inf], np.nan).reindex(base_series.index)
+        scale_factor = scale_factor.fillna(0.0)
+
+        scaled_df = df.mul(scale_factor, axis=0).reindex(base_series.index)
+        result_map = {sym: scaled_df[sym].rename(str(self)) for sym in scaled_df.columns}
+        self._store_cache(cache_key, result_map)
+        return self._result_cache[cache_key]
+
+    def _load_internal(self, instrument, start_index, end_index, *args):
+        freq = args[0] if args else None
+        cache_key = self._cache_key(start_index, end_index, freq)
+        cached = self._result_cache.get(cache_key)
+        if cached is None:
+            cached = self._build_cross_sectional_cache(cache_key, instrument, start_index, end_index, freq, args)
+        else:
+            self._result_cache.move_to_end(cache_key)
+        result = cached.get(instrument)
+        if result is not None:
+            return result
+        series = self.feature.load(instrument, start_index, end_index, *args)
+        return self._empty_like(series, str(self))
+
+
 class PairOperator(ExpressionOps):
     """Pair-wise operator
 
@@ -635,6 +750,54 @@ class Power(NpPairOperator):
 
     def __init__(self, feature_left, feature_right):
         super(Power, self).__init__(feature_left, feature_right, "power")
+
+
+class SignedPower(PairOperator):
+    """Signed Power Operator
+
+    Raises the absolute value of the left-hand feature to the given exponent
+    and then restores the original sign, matching Alpha101's ``signedpower``.
+    """
+
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right)
+
+    def _load_internal(self, instrument, start_index, end_index, *args):
+        if isinstance(self.feature_left, Expression):
+            series_left = self.feature_left.load(instrument, start_index, end_index, *args)
+        else:
+            series_left = self.feature_left
+
+        if isinstance(self.feature_right, Expression):
+            series_right = self.feature_right.load(instrument, start_index, end_index, *args)
+        else:
+            series_right = self.feature_right
+
+        check_length = isinstance(series_left, (np.ndarray, pd.Series)) and isinstance(
+            series_right, (np.ndarray, pd.Series)
+        )
+        if check_length:
+            warning_info = (
+                f"Loading {instrument}: {str(self)}; signed power operation has mismatched lengths: "
+                f"({len(series_left)}, {len(series_right)}). Please check the data."
+            )
+        else:
+            warning_info = f"Loading {instrument}: {str(self)}; signed power operation encountered invalid inputs."
+
+        try:
+            magnitude = np.power(np.abs(series_left), series_right)
+            result = np.sign(series_left) * magnitude
+        except ValueError as exc:
+            get_module_logger("ops").debug(warning_info)
+            raise ValueError(f"{str(exc)}. \n\t{warning_info}") from exc
+        else:
+            if check_length and len(series_left) != len(series_right):
+                get_module_logger("ops").debug(warning_info)
+
+        if isinstance(result, pd.Series):
+            result = result.astype(float)
+            result.name = str(self)
+        return result
 
 
 class Add(NpPairOperator):
@@ -1144,6 +1307,39 @@ class Sum(Rolling):
 
     def __init__(self, feature, N):
         super(Sum, self).__init__(feature, N, "sum")
+
+
+class Product(Rolling):
+    """Rolling Product
+
+    Parameters
+    ----------
+    feature : Expression
+        feature instance
+    N : int
+        rolling window size
+
+    Returns
+    ----------
+    Expression
+        a feature instance with rolling product
+    """
+
+    def __init__(self, feature, N):
+        super(Product, self).__init__(feature, N, "prod")
+
+    def _load_internal(self, instrument, start_index, end_index, *args):
+        series = self.feature.load(instrument, start_index, end_index, *args)
+        if isinstance(self.N, float) and 0 < self.N < 1:
+            raise ValueError("Product does not support exponential windows (0 < N < 1)")
+        if isinstance(self.N, int) and self.N == 0:
+            return series.expanding(min_periods=1).apply(np.prod, raw=True)
+
+        rolling_obj = series.rolling(self.N, min_periods=1)
+        prod_func = getattr(rolling_obj, "prod", None)
+        if callable(prod_func):
+            return prod_func()
+        return rolling_obj.apply(np.prod, raw=True)
 
 
 class Std(Rolling):
@@ -1902,6 +2098,7 @@ OpsList = [
     Max,
     Min,
     Sum,
+    Product,
     Mean,
     Std,
     Var,
@@ -1925,6 +2122,7 @@ OpsList = [
     Sign,
     Log,
     Power,
+    SignedPower,
     Add,
     Sub,
     Mul,
@@ -1943,6 +2141,7 @@ OpsList = [
     Mask,
     IndNeutralize,
     CSRank,
+    Scale,
     IdxMax,
     IdxMin,
     If,
