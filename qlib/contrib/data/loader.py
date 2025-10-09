@@ -1,3 +1,7 @@
+from functools import lru_cache
+from pathlib import Path
+from typing import Iterable, Optional, Sequence, Tuple
+
 from qlib.data.dataset.loader import QlibDataLoader
 
 
@@ -308,3 +312,137 @@ class Alpha158DL(QlibDataLoader):
                 names += ["VSUMD%d" % d for d in windows]
 
         return fields, names
+
+
+class Alpha101DL(QlibDataLoader):
+    """Dataloader to get Alpha101"""
+
+    _DEFAULT_FILE = Path(__file__).resolve().parents[3] / "scripts" / "data_collector" / "vnstock" / "alpha101.txt"
+    _NAME_TEMPLATE = "ALPHA101_{:03d}"
+
+    def __init__(self, config=None, **kwargs):
+        config_dict = dict(config) if isinstance(config, dict) else {}
+        feature_cfg = config_dict.pop("feature", None)
+
+        if feature_cfg is None:
+            feature_config = self.get_feature_config()
+        elif isinstance(feature_cfg, (list, tuple)) and len(feature_cfg) == 2:
+            feature_config = feature_cfg
+        else:
+            feature_config = self.get_feature_config(feature_cfg)
+
+        _config = {
+            "feature": feature_config,
+        }
+        if config_dict:
+            _config.update(config_dict)
+        super().__init__(config=_config, **kwargs)
+
+    @classmethod
+    def get_feature_config(cls, config=None):
+        if isinstance(config, (list, tuple)) and len(config) == 2:
+            return config
+
+        cfg = cls._normalise_config(config)
+        entries = list(cls._load_alpha101_entries(cfg["path"]))
+
+        include_indices = cls._normalise_selection(cfg.get("include"))
+        exclude_indices = cls._normalise_selection(cfg.get("exclude"))
+
+        if include_indices is not None:
+            entries = [entry for entry in entries if entry[0] in include_indices]
+        if exclude_indices is not None:
+            entries = [entry for entry in entries if entry[0] not in exclude_indices]
+
+        limit = cfg.get("limit")
+        if limit is not None:
+            if not isinstance(limit, int) or limit <= 0:
+                raise ValueError("Alpha101 limit must be a positive integer")
+            entries = entries[:limit]
+
+        if not entries:
+            raise ValueError("Alpha101 feature selection produced no expressions")
+
+        fields = [expr for _, expr, _ in entries]
+        names = [name for _, _, name in entries]
+        return fields, names
+
+    @classmethod
+    @lru_cache(maxsize=None)
+    def _load_alpha101_entries(cls, path_str: str) -> Tuple[Tuple[int, str, str], ...]:
+        source_path = Path(path_str) if path_str else cls._DEFAULT_FILE
+        if not source_path.exists():
+            raise FileNotFoundError(f"Alpha101 definition file not found: {source_path}")
+
+        entries = []
+        with source_path.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or not line.startswith("Alpha#"):
+                    continue
+                try:
+                    prefix, expr = line.split(":", 1)
+                except ValueError as exc:
+                    raise ValueError(f"Invalid Alpha101 line: {raw_line.rstrip()}") from exc
+
+                number_token = prefix.split("#", 1)[1].strip()
+                if not number_token.isdigit():
+                    raise ValueError(f"Alpha identifier must be numeric: {prefix}")
+                index = int(number_token)
+                expression = expr.strip()
+                if not expression:
+                    raise ValueError(f"Alpha#{index} has empty expression")
+                entries.append((index, expression, cls._NAME_TEMPLATE.format(index)))
+
+        if not entries:
+            raise ValueError(f"No Alpha101 expressions parsed from {source_path}")
+
+        entries.sort(key=lambda item: item[0])
+        return tuple(entries)
+
+    @classmethod
+    def _normalise_config(cls, config) -> dict:
+        if config is None:
+            return {"path": str(cls._DEFAULT_FILE)}
+        if isinstance(config, dict):
+            normalised = dict(config)
+            path = normalised.get("path") or normalised.get("source_path")
+            normalised["path"] = str(path) if path is not None else str(cls._DEFAULT_FILE)
+            return normalised
+        raise TypeError("Alpha101 feature config must be a mapping or None")
+
+    @classmethod
+    def _normalise_selection(cls, selectors: Iterable) -> Optional[Sequence[int]]:
+        if selectors is None:
+            return None
+        if isinstance(selectors, (int, str)):
+            selectors = [selectors]
+
+        indices = set()
+        for item in selectors:
+            if isinstance(item, int):
+                if item <= 0:
+                    raise ValueError("Alpha101 index must be positive")
+                indices.add(item)
+                continue
+            if isinstance(item, str):
+                token = item.strip().upper()
+                if not token:
+                    continue
+                for prefix in ("ALPHA101_", "ALPHA#", "ALPHA"):
+                    if token.startswith(prefix):
+                        token = token[len(prefix) :]
+                        break
+                token = token.lstrip("_#")
+                token = token.lstrip("0") or "0"
+                if token.isdigit():
+                    value = int(token)
+                    if value <= 0:
+                        raise ValueError("Alpha101 index must be positive")
+                    indices.add(value)
+                    continue
+                raise ValueError(f"Unsupported Alpha101 selector: {item}")
+            else:
+                raise TypeError("Alpha101 selectors must be int or str")
+
+        return tuple(sorted(indices))
