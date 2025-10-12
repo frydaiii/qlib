@@ -295,9 +295,10 @@ def parse_field(field):
             rf"\$\$([\w{chinese_punctuation_regex}]+)",
             r'PFeature("\1")',
         ),  # $$ must be before $
+        (r"\$[Aa][Dd][Vv](\d+)", r"Adv(\1)"),  # convert $advN before generic $ handling
         (rf"\$([\w{chinese_punctuation_regex}]+)", r'Feature("\1")'),
         (r"\b[Aa][Dd][Vv](\d+)\b", r"Adv(\1)"),
-        (r"(\w+\s*)\(", r"Operators.\1("),
+        (r"(?<!\.)(\b\w+\s*)\(", r"Operators.\1("),
     ]:  # Features  # Operators
         field = re.sub(pattern, new, field)
     return field
