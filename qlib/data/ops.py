@@ -1112,7 +1112,51 @@ class If(ExpressionOps):
             series_right = self.feature_right.load(instrument, start_index, end_index, *args)
         else:
             series_right = self.feature_right
-        series = pd.Series(np.where(series_cond, series_left, series_right), index=series_cond.index)
+
+        def _ensure_series(value, index, fill_value=np.nan, dtype=None):
+            """Align arbitrary inputs to the target index as a Series."""
+            if isinstance(value, pd.Series):
+                return value.reindex(index)
+            if np.isscalar(value):
+                return pd.Series(np.full(len(index), value), index=index, dtype=dtype)
+            array = np.asarray(value)
+            if array.size == 0:
+                return pd.Series(np.full(len(index), fill_value), index=index, dtype=dtype)
+            if array.size == 1 and len(index) != 1:
+                return pd.Series(np.full(len(index), array.item()), index=index, dtype=dtype)
+            if array.ndim != 1 or array.size != len(index):
+                raise ValueError(
+                    f"Unable to align input of shape {array.shape} with target index of length {len(index)} "
+                    f"when evaluating {self}."
+                )
+            return pd.Series(array, index=index, dtype=dtype)
+
+        series_like = [
+            s for s in (series_cond, series_left, series_right) if isinstance(s, pd.Series)
+        ]
+        if series_like:
+            non_empty_indexes = [ser.index for ser in series_like if len(ser.index) > 0]
+            if non_empty_indexes:
+                target_index = non_empty_indexes[0]
+                for idx in non_empty_indexes[1:]:
+                    target_index = target_index.union(idx)
+            else:
+                # fall back to the first (empty) index to preserve type information
+                target_index = series_like[0].index
+                for ser in series_like[1:]:
+                    target_index = target_index.union(ser.index)
+            series_cond = _ensure_series(series_cond, target_index, fill_value=False, dtype=bool)
+            series_left = _ensure_series(series_left, target_index)
+            series_right = _ensure_series(series_right, target_index)
+            mask = series_cond.eq(True)
+            result = series_right.copy()
+            result = result.reindex(target_index)
+            result.loc[mask] = series_left.loc[mask]
+            return result
+
+        series = np.where(series_cond, series_left, series_right)
+        if isinstance(series, np.ndarray):
+            return pd.Series(series)
         return series
 
     def get_longest_back_rolling(self):
