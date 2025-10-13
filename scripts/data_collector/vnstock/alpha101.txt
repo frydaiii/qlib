@@ -69,7 +69,7 @@ Alpha#67: (-1.0 * Power(CSRank($high - Min($high, 2)), CSRank(Corr(IndNeutralize
 Alpha#68: (-1.0 * Lt(Rank(Corr(CSRank($high), CSRank($adv15), 8), 13), CSRank(Delta(($close * 0.518371) + ($low * (1.0 - 0.518371)), 1))))
 Alpha#69: (-1.0 * Power(CSRank(Max(Delta(IndNeutralize($vwap, 3), 2), 4)), Rank(Corr(($close * 0.490655) + ($vwap * (1.0 - 0.490655)), $adv20, 4), 9)))
 Alpha#70: (-1.0 * Power(CSRank(Delta($vwap, 1)), Rank(Corr(IndNeutralize($close, 3), $adv50, 17), 17)))
-Alpha#71: Greater(Rank(WMA(Corr(Rank($close, 3), Rank($adv180, 12), 18), 4), 15), Rank(WMA(Power(CSRank(($low + $open) - ($vwap + $vwap)), 2.0), 16), 4)))
+Alpha#71: Greater(Rank(WMA(Corr(Rank($close, 3), Rank($adv180, 12), 18), 4), 15), Rank(WMA(Power(CSRank(($low + $open) - ($vwap + $vwap)), 2.0), 16), 4))
 Alpha#72: (CSRank(WMA(Corr(($high + $low) / 2.0, $adv40, 8), 10)) / CSRank(WMA(Corr(Rank($vwap, 3), Rank($volume, 18), 6), 2)))
 Alpha#73: (-1.0 * Greater(CSRank(WMA(Delta($vwap, 4), 2)), Rank(WMA((-1.0 * (Delta(($open * 0.147155) + ($low * (1.0 - 0.147155)), 2) / (($open * 0.147155) + ($low * (1.0 - 0.147155))))), 3), 16)))
 Alpha#74: (-1.0 * Lt(CSRank(Corr($close, Sum($adv30, 37), 15)), CSRank(Corr(CSRank(($high * 0.0261661) + ($vwap * (1.0 - 0.0261661))), CSRank($volume), 11))))
