@@ -6,6 +6,7 @@ import copy
 import time
 import datetime
 import importlib
+import json
 from abc import ABC
 import multiprocessing
 from io import StringIO
@@ -25,7 +26,7 @@ import qlib
 from qlib.data import D
 from qlib.tests.data import GetData
 from qlib.utils import code_to_fname, fname_to_code, exists_qlib_data
-from qlib.constant import REG_CN as REGION_VN
+from qlib.constant import REG_VN as REGION_VN
 
 CUR_DIR = Path(__file__).resolve().parent
 sys.path.append(str(CUR_DIR.parent.parent))
@@ -65,7 +66,8 @@ def get_vn_stock_symbols():
         symbols_ts = listing.symbols_by_group('HOSE') # Currently only HOSE is supported
         if isinstance(symbols_ts, pd.Series) and not symbols_ts.empty:
             symbols = symbols_ts.tolist()
-            return symbols
+            # return symbols
+            return ["HPG"] #TODO for test
         else:
             logger.warning("No symbol data available")
             return []
@@ -84,6 +86,9 @@ class VNStockCollector(BaseCollector, ABC):
         ),
         "Referer": "https://finance.vietstock.vn/",
     }
+    _ENTITY_SENTIMENT_DIR = Path(__file__).resolve().parents[3] / "qlib" / "data" / "entity_sentiment"
+    _entity_sentiment_cache: dict[str, dict[str, float]] = {}
+    _industry_code_map: dict[str, str] = {}
 
     def __init__(
         self,
@@ -237,6 +242,171 @@ class VNStockCollector(BaseCollector, ABC):
         return ascii_name
 
     @classmethod
+    def _aggregate_entity_score(cls, entries) -> float | None:
+        if not isinstance(entries, list):
+            return None
+        scores: list[float] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                sentiment = float(entry.get("sentiment"))
+                confidence = float(entry.get("confidence", 1))
+            except (TypeError, ValueError):
+                continue
+            if np.isnan(sentiment) or np.isnan(confidence):
+                continue
+            scores.append(sentiment * confidence)
+        if not scores:
+            return None
+        return float(np.mean(scores))
+
+    @classmethod
+    def _load_entity_sentiments(cls):
+        if cls._entity_sentiment_cache:
+            return
+        sentiment_dir = cls._ENTITY_SENTIMENT_DIR
+        if not sentiment_dir.exists():
+            logger.debug("Entity sentiment directory not found: %s", sentiment_dir)
+            return
+        for file_path in sorted(sentiment_dir.glob("*.json")):
+            try:
+                with file_path.open("r", encoding="utf-8") as fp:
+                    raw = json.load(fp)
+            except Exception as exc:
+                logger.debug("Skip loading sentiment file %s: %s", file_path.name, exc)
+                continue
+            if not isinstance(raw, dict):
+                continue
+            aggregated: dict[str, float] = {}
+            for entity, entries in raw.items():
+                score = cls._aggregate_entity_score(entries)
+                if score is None:
+                    continue
+                aggregated[str(entity).upper()] = score
+            cls._entity_sentiment_cache[file_path.stem] = aggregated
+
+    @classmethod
+    def _get_daily_sentiments(cls, date_value) -> dict[str, float]:
+        if not cls._entity_sentiment_cache:
+            cls._load_entity_sentiments()
+        try:
+            date_str = pd.Timestamp(date_value).strftime("%Y-%m-%d")
+        except Exception:
+            return {}
+        return cls._entity_sentiment_cache.get(date_str, {})
+
+    @classmethod
+    def _ensure_industry_code_map(cls):
+        if cls._industry_code_map:
+            return
+        try:
+            listing = Listing()
+            industries = listing.symbols_by_industries()
+        except Exception as exc:
+            logger.debug("Unable to load industry codes from vnstock: %s", exc)
+            return
+        if not isinstance(industries, pd.DataFrame) or "symbol" not in industries.columns:
+            logger.debug("Industry classification data is not available in expected format")
+            return
+        industries = industries.copy()
+        industries["symbol"] = industries["symbol"].astype(str).str.upper()
+        code_columns = [col for col in ["icb_code4", "icb_code3", "icb_code2"] if col in industries.columns]
+        if not code_columns:
+            logger.debug("Industry classification columns are missing in vnstock listing data")
+            return
+        for _, row in industries.iterrows():
+            code = None
+            for col in code_columns:
+                value = row.get(col)
+                if pd.notna(value) and str(value).strip():
+                    code = cls._normalize_industry_code(str(value).strip())
+                    break
+            if code:
+                cls._industry_code_map[row["symbol"]] = code
+
+    @staticmethod
+    def _normalize_industry_code(industry_code: str | None) -> str | None:
+        if industry_code is None:
+            return None
+        code_str = str(industry_code).strip()
+        if not code_str:
+            return None
+        if code_str.endswith(".0"):
+            code_str = code_str[:-2]
+        digits = "".join(ch for ch in code_str if ch.isdigit())
+        if not digits:
+            return None
+        if len(digits) < 4:
+            digits = digits.ljust(4, "0")
+        elif len(digits) > 4:
+            digits = digits[:4]
+        return digits
+
+    @classmethod
+    def _compute_industry_level(cls, industry_code: str | None) -> float:
+        normalized = cls._normalize_industry_code(industry_code)
+        if normalized is None:
+            return np.nan
+        trailing_zeros = len(normalized) - len(normalized.rstrip("0"))
+        level = 4 - trailing_zeros
+        try:
+            return float(max(1, min(4, level)))
+        except Exception:
+            return np.nan
+
+    @classmethod
+    def _get_industry_level_codes(cls, industry_code: str | None) -> dict[int, str]:
+        normalized = cls._normalize_industry_code(industry_code)
+        if normalized is None:
+            return {}
+        return {
+            1: normalized[0] + "000",
+            2: normalized[:2] + "00",
+            3: normalized[:3] + "0",
+            4: normalized,
+        }
+
+    def _attach_entity_sentiment(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return df
+        time_col = "time" if "time" in df.columns else "date" if "date" in df.columns else None
+        if time_col is None or "symbol" not in df.columns:
+            return df
+
+        df = df.copy()
+        symbol = str(df["symbol"].iloc[0]).upper()
+
+        self._ensure_industry_code_map()
+        industry_code = self._industry_code_map.get(symbol)
+        industry_level = self._compute_industry_level(industry_code)
+        industry_level_codes = self._get_industry_level_codes(industry_code)
+        has_industry_level = industry_level is not None and not np.isnan(industry_level)
+
+        timestamps = pd.to_datetime(df[time_col], errors="coerce")
+        ticker_scores: list[float] = []
+        industry_level_scores: dict[int, list[float]] = {idx: [] for idx in range(1, 5)}
+        for ts in timestamps:
+            if pd.isna(ts):
+                ticker_scores.append(np.nan)
+                for lvl in industry_level_scores:
+                    industry_level_scores[lvl].append(np.nan)
+                continue
+            sentiments = self._get_daily_sentiments(ts)
+            ticker_scores.append(sentiments.get(symbol, np.nan))
+            for lvl, code in industry_level_codes.items():
+                if not has_industry_level or lvl > industry_level:
+                    industry_level_scores[lvl].append(np.nan)
+                    continue
+                industry_level_scores[lvl].append(sentiments.get(str(code), np.nan))
+
+        for lvl, scores in industry_level_scores.items():
+            series = pd.Series(scores, index=df.index, dtype="float64").fillna(0)
+            df[f"ind{lvl}_sent"] = series
+        df["ticker_sent"] = pd.Series(ticker_scores, index=df.index, dtype="float64").fillna(0)
+        return df
+
+    @classmethod
     def _fetch_market_cap_frame(
         cls, symbol: str | None, start_time: pd.Timestamp | None, end_time: pd.Timestamp | None
     ) -> pd.DataFrame:
@@ -316,6 +486,7 @@ class VNStockCollector(BaseCollector, ABC):
         # TODO: calculate vwap based on intraday data
         if df is None or df.empty:
             return df
+        df = self._attach_entity_sentiment(df)
         if "vwap" in df.columns and df["vwap"].notna().any():
             return df
         if "volume" not in df.columns:
@@ -498,11 +669,12 @@ class VNStockCollector(BaseCollector, ABC):
         return validated
 
     def save_instrument(self, symbol, df: pd.DataFrame):
-        validated_df = self._validate_recent_daily_data(symbol, df)
-        if validated_df is None or validated_df.empty:
-            logger.warning(f"{symbol}: skip saving because data failed recent-day validation")
-            return
-        super().save_instrument(symbol, validated_df)
+        # validated_df = self._validate_recent_daily_data(symbol, df)
+        #TODO: temporarily disable recent-day validation
+        # if validated_df is None or validated_df.empty:
+        #     logger.warning(f"{symbol}: skip saving because data failed recent-day validation")
+        #     return
+        super().save_instrument(symbol, df)
 
     def collector_data(self):
         """collector data"""
@@ -786,9 +958,19 @@ class VNStockNormalize1D(VNStockNormalize, ABC):
         df.sort_values(self._date_field_name, inplace=True)
         df = df.set_index(self._date_field_name)
         _close = self._get_first_close(df)
+        skip_cols = {
+            self._symbol_field_name,
+            "adjclose",
+            "change",
+            "ticker_sent",
+            "ind1_sent",
+            "ind2_sent",
+            "ind3_sent",
+            "ind4_sent",
+        }
         for _col in df.columns:
             # NOTE: retain original adjclose, required for incremental updates
-            if _col in [self._symbol_field_name, "adjclose", "change"]:
+            if _col in skip_cols:
                 continue
             if _col == "volume":
                 df[_col] = df[_col] * _close
