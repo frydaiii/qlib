@@ -144,6 +144,10 @@ class Alpha158(DataHandlerLP):
                 "windows": [0],
                 "feature": ["OPEN", "HIGH", "LOW", "VWAP"],
             },
+            "sentiment": {
+                "windows": [0],
+                "feature": ["ticker_sent", "ind1_sent", "ind2_sent", "ind3_sent", "ind4_sent"],
+            },
             "rolling": {},
         }
         return Alpha158DL.get_feature_config(conf)

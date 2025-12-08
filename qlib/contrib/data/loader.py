@@ -81,6 +81,10 @@ class Alpha158DL(QlibDataLoader):
                 "windows": [0],
                 "feature": ["OPEN", "HIGH", "LOW", "VWAP"],
             },
+            "sentiment": {
+                "windows": [0],
+                "feature": ["ticker_sent", "ind1_sent", "ind2_sent", "ind3_sent", "ind4_sent"],
+            },
             "rolling": {},
         }
     ):
@@ -91,6 +95,10 @@ class Alpha158DL(QlibDataLoader):
             'price': { # whether to use raw price features
                 'windows': [0, 1, 2, 3, 4], # use price at n days ago
                 'feature': ['OPEN', 'HIGH', 'LOW'] # which price field to use
+            },
+            'sentiment': { # whether to include raw sentiment features
+                'windows': [0, 1, 2, 3, 4], # use sentiment values at n days ago
+                'feature': ['ticker_sent', 'ind1_sent', 'ind2_sent', 'ind3_sent', 'ind4_sent'] # sentiment fields
             },
             'volume': { # whether to use raw volume features
                 'windows': [0, 1, 2, 3, 4], # use volume at n days ago
@@ -134,6 +142,15 @@ class Alpha158DL(QlibDataLoader):
             for field in feature:
                 field = field.lower()
                 fields += ["Ref($%s, %d)/$close" % (field, d) if d != 0 else "$%s/$close" % field for d in windows]
+                names += [field.upper() + str(d) for d in windows]
+        if "sentiment" in config:
+            windows = config["sentiment"].get("windows", [0])
+            feature = config["sentiment"].get(
+                "feature", ["ticker_sent", "ind1_sent", "ind2_sent", "ind3_sent", "ind4_sent"]
+            )
+            for field in feature:
+                field = field.lower()
+                fields += ["Ref($%s, %d)" % (field, d) if d != 0 else "$%s" % field for d in windows]
                 names += [field.upper() + str(d) for d in windows]
         if "volume" in config:
             windows = config["volume"].get("windows", range(5))
