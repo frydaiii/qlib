@@ -64,10 +64,11 @@ def get_vn_stock_symbols():
         #     return []
 
         symbols_ts = listing.symbols_by_group('HOSE') # Currently only HOSE is supported
+        # Filter stocks only (3 characters)
+        symbols_ts = symbols_ts[symbols_ts.str.len() == 3]
         if isinstance(symbols_ts, pd.Series) and not symbols_ts.empty:
             symbols = symbols_ts.tolist()
-            # return symbols
-            return ["HPG"] #TODO for test
+            return symbols
         else:
             logger.warning("No symbol data available")
             return []
@@ -86,7 +87,7 @@ class VNStockCollector(BaseCollector, ABC):
         ),
         "Referer": "https://finance.vietstock.vn/",
     }
-    _ENTITY_SENTIMENT_DIR = Path(__file__).resolve().parents[3] / "qlib" / "data" / "entity_sentiment"
+    _ENTITY_SENTIMENT_DIR = Path("~/.qlib/history-sentiment-data/sentiment/entity_sentiment").expanduser()
     _entity_sentiment_cache: dict[str, dict[str, float]] = {}
     _industry_code_map: dict[str, str] = {}
 
