@@ -83,7 +83,7 @@ class Alpha158DL(QlibDataLoader):
             },
             "sentiment": {
                 "windows": [0],
-                "feature": ["ticker_sent", "ind1_sent", "ind2_sent", "ind3_sent", "ind4_sent"],
+                "feature": ["ticker_sent"],
             },
             "rolling": {},
         }
@@ -98,7 +98,7 @@ class Alpha158DL(QlibDataLoader):
             },
             'sentiment': { # whether to include raw sentiment features
                 'windows': [0, 1, 2, 3, 4], # use sentiment values at n days ago
-                'feature': ['ticker_sent', 'ind1_sent', 'ind2_sent', 'ind3_sent', 'ind4_sent'] # sentiment fields
+                'feature': ['ticker_sent'] # sentiment fields
             },
             'volume': { # whether to use raw volume features
                 'windows': [0, 1, 2, 3, 4], # use volume at n days ago
@@ -146,7 +146,7 @@ class Alpha158DL(QlibDataLoader):
         if "sentiment" in config:
             windows = config["sentiment"].get("windows", [0])
             feature = config["sentiment"].get(
-                "feature", ["ticker_sent", "ind1_sent", "ind2_sent", "ind3_sent", "ind4_sent"]
+                "feature", ["ticker_sent"]
             )
             for field in feature:
                 field = field.lower()

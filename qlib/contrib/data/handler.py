@@ -146,7 +146,7 @@ class Alpha158(DataHandlerLP):
             },
             "sentiment": {
                 "windows": [0],
-                "feature": ["ticker_sent", "ind1_sent", "ind2_sent", "ind3_sent", "ind4_sent"],
+                "feature": ["ticker_sent"],
             },
             "rolling": {},
         }
