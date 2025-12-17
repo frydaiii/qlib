@@ -98,7 +98,7 @@ class Alpha158DL(QlibDataLoader):
             },
             'sentiment': { # whether to include raw sentiment features
                 'windows': [0, 1, 2, 3, 4], # use sentiment values at n days ago
-                'feature': ['ticker_sent'] # sentiment fields
+                'feature': ['ticker_sent'] # sentiment fields; binary indicators are added automatically
             },
             'volume': { # whether to use raw volume features
                 'windows': [0, 1, 2, 3, 4], # use volume at n days ago
@@ -145,13 +145,16 @@ class Alpha158DL(QlibDataLoader):
                 names += [field.upper() + str(d) for d in windows]
         if "sentiment" in config:
             windows = config["sentiment"].get("windows", [0])
-            feature = config["sentiment"].get(
-                "feature", ["ticker_sent"]
-            )
+            feature = config["sentiment"].get("feature", ["ticker_sent"])
             for field in feature:
                 field = field.lower()
                 fields += ["Ref($%s, %d)" % (field, d) if d != 0 else "$%s" % field for d in windows]
                 names += [field.upper() + str(d) for d in windows]
+                fields += [
+                    "Abs(Sign(Ref($%s, %d)))" % (field, d) if d != 0 else "Abs(Sign($%s))" % field
+                    for d in windows
+                ]
+                names += [field.upper() + "_BIN" + str(d) for d in windows]
         if "volume" in config:
             windows = config["volume"].get("windows", range(5))
             fields += ["Ref($volume, %d)/($volume+1e-12)" % d if d != 0 else "$volume/($volume+1e-12)" for d in windows]
